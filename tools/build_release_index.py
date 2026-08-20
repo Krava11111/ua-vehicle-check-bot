@@ -27,12 +27,14 @@ SOURCE_PAGE = f"https://data.gov.ua/dataset/{DATASET_ID}"
 SOURCE_LABEL = "МВС України / data.gov.ua"
 WANTED_SOURCE_PAGE = f"https://data.gov.ua/dataset/{WANTED_DATASET_ID}"
 WANTED_SOURCE_LABEL = "Національна поліція України / data.gov.ua"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 WANTED_SCHEMA_VERSION = 1
 DEFAULT_PREFIX_LENGTH = 3
 DEFAULT_MAX_EVENTS = 50
 MAX_GITHUB_RELEASE_ASSET_BYTES = 2_000_000_000
 MAX_WORKER_SHARD_BYTES = 12 * 1024 * 1024
+PLATE_ASSIGNMENT_START_MARKERS = ("ПРИСВО", "ВИДАЧ", "ЗАКРІП", "НАЗНАЧ")
+PLATE_ASSIGNMENT_END_MARKERS = ("ЗНЯТ", "СКАСУВАН", "АНУЛЬОВАН")
 
 CYRILLIC_TO_LATIN = str.maketrans(
     {"А": "A", "В": "B", "Е": "E", "І": "I", "К": "K", "М": "M", "Н": "H", "О": "O", "Р": "P", "С": "C", "Т": "T", "Х": "X"}
@@ -538,6 +540,103 @@ def _merge_vehicle(vehicle: dict[str, Any], row: CompactRow) -> None:
                 vehicle[key] = value
 
 
+def _plate_spool_value(row: CompactRow) -> list[Any]:
+    return [
+        row.plate,
+        row.key,
+        row.vin,
+        row.registration_date,
+        row.operation_code,
+        row.operation_name,
+        row.brand,
+        row.model,
+        row.year,
+        row.color,
+        row.vehicle_type,
+        row.service_center,
+    ]
+
+
+def _plate_assignment_identity(value: list[Any]) -> str:
+    _, vehicle_key, vin, registration_date, operation_code, operation_name, brand, model, year, color, vehicle_type, service_center = value
+    if vin:
+        return f"vin:{vin}"
+    characteristics = [brand, model, year, color, vehicle_type]
+    if any(item is not None for item in characteristics):
+        raw = "|".join(str(item or "").strip().casefold() for item in characteristics)
+        return f"unknown:{hashlib.sha256(raw.encode()).hexdigest()[:20]}"
+    raw = "|".join(
+        str(item or "")
+        for item in [vehicle_key, registration_date, operation_code, operation_name, service_center]
+    )
+    return f"unresolved:{hashlib.sha256(raw.encode()).hexdigest()[:20]}"
+
+
+def _merge_plate_assignment(assignments: dict[str, dict[str, Any]], value: list[Any]) -> None:
+    plate, vehicle_key, vin, registration_date, operation_code, operation_name, brand, model, year, color, vehicle_type, _ = value
+    identity = _plate_assignment_identity(value)
+    text = f"{operation_code or ''} {operation_name or ''}".upper()
+    assignment = assignments.setdefault(
+        identity,
+        {
+            "vehicle_key": vehicle_key,
+            "vin": vin,
+            "brand": brand,
+            "model": model,
+            "year": year,
+            "color": color,
+            "vehicle_type": vehicle_type,
+            "first": registration_date,
+            "last": registration_date,
+            "count": 0,
+            "start": False,
+            "end": False,
+            "latest": registration_date or "",
+            "plate": plate,
+        },
+    )
+    assignment["count"] += 1
+    if registration_date:
+        assignment["first"] = min(assignment["first"] or registration_date, registration_date)
+        assignment["last"] = max(assignment["last"] or registration_date, registration_date)
+    assignment["start"] = assignment["start"] or any(
+        marker in text for marker in PLATE_ASSIGNMENT_START_MARKERS
+    )
+    assignment["end"] = assignment["end"] or any(
+        marker in text for marker in PLATE_ASSIGNMENT_END_MARKERS
+    )
+    if (registration_date or "") >= assignment["latest"]:
+        assignment["latest"] = registration_date or ""
+        for key, item in (
+            ("vehicle_key", vehicle_key),
+            ("vin", vin),
+            ("brand", brand),
+            ("model", model),
+            ("year", year),
+            ("color", color),
+            ("vehicle_type", vehicle_type),
+        ):
+            if item is not None:
+                assignment[key] = item
+
+
+def _serialize_plate_assignment(value: dict[str, Any]) -> list[Any]:
+    confidence = "HIGH" if value["start"] and value["end"] else "MEDIUM" if value["count"] > 1 else "LOW"
+    return [
+        value["vehicle_key"],
+        value["vin"],
+        value["brand"],
+        value["model"],
+        value["year"],
+        value["color"],
+        value["vehicle_type"],
+        value["first"],
+        value["last"],
+        value["count"],
+        confidence,
+    ]
+
+
 def _gzip_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as raw:
@@ -605,7 +704,9 @@ def build_index(
                 resource_rows += 1
                 vehicle_writers.write(shard_for(row.key, prefix_length), row.spool_value())
                 if row.plate:
-                    plate_writers.write(shard_for(row.plate, prefix_length), [row.plate, row.key])
+                    plate_writers.write(
+                        shard_for(row.plate, prefix_length), _plate_spool_value(row)
+                    )
             print(f"[{resource_index}/{resource_total}] Accepted {resource_rows:,} rows", flush=True)
             if not str(resource["url"]).startswith("file:"):
                 path.unlink(missing_ok=True)
@@ -619,6 +720,7 @@ def build_index(
         plate_count = 0
         nonempty_vehicle_shards = 0
         nonempty_plate_shards = 0
+        plate_assignment_count = 0
 
         for spool in sorted((work / "vehicle-spool").glob("*.jsonl")):
             vehicles: dict[str, dict[str, Any]] = {}
@@ -641,14 +743,29 @@ def build_index(
 
         for spool in sorted((work / "plate-spool").glob("*.jsonl")):
             plates: dict[str, set[str]] = {}
+            histories: dict[str, dict[str, dict[str, Any]]] = {}
             with spool.open("r", encoding="utf-8") as stream:
                 for line in stream:
-                    plate, key = json.loads(line)
+                    value = json.loads(line)
+                    plate, key = value[0], value[1]
                     plates.setdefault(plate, set()).add(key)
+                    _merge_plate_assignment(histories.setdefault(plate, {}), value)
             serialized = {plate: sorted(keys) for plate, keys in plates.items()}
+            serialized_history = {
+                plate: sorted(
+                    (_serialize_plate_assignment(item) for item in assignments.values()),
+                    key=lambda item: (item[7] or "9999", item[0]),
+                )
+                for plate, assignments in histories.items()
+            }
             shard = spool.stem
             _gzip_json(assets / shard[0] / f"plates-{shard}.json.gz", serialized)
+            _gzip_json(
+                assets / shard[0] / f"plate-history-{shard}.json.gz",
+                serialized_history,
+            )
             plate_count += len(serialized)
+            plate_assignment_count += sum(len(items) for items in serialized_history.values())
             nonempty_plate_shards += 1
 
         archives = output_dir / "archives"
@@ -670,6 +787,8 @@ def build_index(
             "repository": repository,
             "shard_prefix_length": prefix_length,
             "max_events_per_vehicle": max_events,
+            "history_start_year": metadata.get("from_year") or 2013,
+            "plate_history_available": True,
             "archive_url_template": f"https://github.com/{repository}/releases/download/vehicle-data-{{version}}-{{group}}/index-{{group}}.zip",
             "counts": {
                 "input_rows": rows_seen,
@@ -679,6 +798,7 @@ def build_index(
                 "events": event_count,
                 "vehicle_shards": nonempty_vehicle_shards,
                 "plate_shards": nonempty_plate_shards,
+                "plate_assignments": plate_assignment_count,
                 "archives": len(archive_sizes),
                 "archive_bytes": sum(archive_sizes.values()),
             },

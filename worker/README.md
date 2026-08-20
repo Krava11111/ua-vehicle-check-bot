@@ -14,7 +14,9 @@ using HTTP Range. The full MVS dataset and even the full ZIP are never stored on
 3. Both indexes are packed into 16 uncompressed-container ZIP files and published to immutable
    releases. The stable `vehicle-data-current` manifest is updated only after all assets exist.
 4. The Worker hashes the plate or VIN, range-reads the ZIP directory and only the matching
-   plate/vehicle members, then decompresses those small members in memory.
+   plate, plate-history, or vehicle members, then decompresses those small members in memory.
+   Plate history has its own compact shard, so it is not limited by the 50 recent events kept
+   in a normal vehicle report.
 
 The official registration source is approximately monthly. The National Police wanted-vehicle
 source is published separately and normally changes daily. The report identifies its checked
@@ -65,7 +67,7 @@ project.
      -Body (@{
        url = "$workerUrl/$secretPath"
        secret_token = $telegramSecret
-       allowed_updates = @('message')
+       allowed_updates = @('message', 'callback_query')
        drop_pending_updates = $true
      } | ConvertTo-Json)
    ```
@@ -115,6 +117,11 @@ python ..\tools\build_release_index.py build-wanted \
   rapid-resale heuristics. These are explicitly marked as open-data matches or the service's own
   analytics, never as a legal conclusion. A wanted-index failure is displayed as unavailable,
   not converted to "no matches".
+- The main menu and every report expose plate history. It lists all conservatively identified
+  vehicle assignments for that plate in the available open-data period, warns that plates can
+  be reused, and never describes the first known event as a proven first registration. Worker
+  isolates cache an already-read plate result for 24 hours; no Redis or paid Cloudflare database
+  is required.
 - The report does not claim a vehicle-specific ДТП result. Published police crash statistics do
   not provide a reliable public VIN/plate-to-crash mapping.
 - Every vehicle report offers buttons to copy its current plate/VIN and opens the official
