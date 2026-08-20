@@ -8,6 +8,8 @@ INDEX_MANIFEST_URL = "https://github.com/Krava11111/ua-vehicle-check-bot/release
 DEFAULT_LANGUAGE = "uk"
 RATE_LIMIT_PER_MINUTE = "10"
 MAX_CANDIDATES = "3"
+MAX_PLATE_HISTORY_CANDIDATES = "20"
+VEHICLE_HISTORY_START_YEAR = "2013"
 
 # Add secrets with:
 #   npx wrangler secret put BOT_TOKEN

@@ -27,13 +27,14 @@ test("renders evidence-based vehicle analytics without claiming certainty", () =
     matches: [],
   };
 
-  const rendered = renderVehicleAnalytics(match, wanted, "uk", new Date("2026-08-20T00:00:00Z"));
+  const rendered = renderVehicleAnalytics(match, wanted, "uk", new Date("2026-08-20T00:00:00Z"), 2020);
 
   assert.match(rendered, /Збігів у відкритому реєстрі .* не знайдено/);
   assert.match(rendered, /Виробник за WMI: Volkswagen/);
   assert.match(rendered, /Модельний рік за VIN: 2017/);
   assert.match(rendered, /Перша операція містить ознаку ввезення/);
-  assert.match(rendered, /Ймовірних змін власника: 2/);
+  assert.match(rendered, /Ймовірних змін власника в доступній історії: 2/);
+  assert.match(rendered, /Реальна кількість попередніх власників може бути більшою/);
   assert.match(rendered, /Усього відомих номерів: 3/);
   assert.match(rendered, /Колір: 2019 — Сірий → 2023 — Чорний/);
   assert.match(rendered, /швидкий перепродаж/);

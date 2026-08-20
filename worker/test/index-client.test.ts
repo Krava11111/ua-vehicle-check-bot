@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { checkWanted, clearCachesForTests, findVehicles, sha256Prefix } from "../src/index-client.js";
-import type { CompactVehicle, IndexManifest, WantedRecord } from "../src/types.js";
+import { checkWanted, clearCachesForTests, findPlateHistory, findVehicles, sha256Prefix } from "../src/index-client.js";
+import type { CompactPlateAssignment, CompactVehicle, IndexManifest, WantedRecord } from "../src/types.js";
 
 function storedZip(name: string, payload: Uint8Array): Uint8Array {
   const encodedName = new TextEncoder().encode(name);
@@ -134,4 +134,51 @@ test("range-reads wanted records by VIN", async () => {
   const result = await checkWanted([vin], manifest, fetcher);
   assert.equal(result.status, "match");
   assert.equal(result.matches[0]?.[0], "wanted-1");
+});
+
+test("range-reads a schema 4 plate-history shard", async () => {
+  clearCachesForTests();
+  const plate = "AA1234BB";
+  const shard = await sha256Prefix(plate, 3);
+  const assignments: CompactPlateAssignment[] = [
+    ["vin-1", "WVWZZZ3CZHE123456", "Volkswagen", "Passat", 2017, "Чорний", "Легковий", "2021-05-01", "2024-01-10", 3, "HIGH"],
+    ["vin-2", "TMBJG7NE0J0123456", "Skoda", "Octavia", 2018, "Сірий", "Легковий", "2024-01-12", "2024-01-12", 1, "LOW"],
+  ];
+  const gzipStream = new Blob([JSON.stringify({ [plate]: assignments })])
+    .stream()
+    .pipeThrough(new CompressionStream("gzip"));
+  const gzip = new Uint8Array(await new Response(gzipStream).arrayBuffer());
+  const zip = storedZip(`plate-history-${shard}.json.gz`, gzip);
+  const fetcher: typeof fetch = async (_input, init) => {
+    const range = new Headers(init?.headers).get("range") ?? "";
+    const match = /^bytes=(\d+)-(\d+)$/.exec(range);
+    if (!match) return new Response("range required", { status: 400 });
+    const start = Number(match[1]);
+    const end = Math.min(Number(match[2]), zip.length - 1);
+    return new Response(zip.slice(start, end + 1), {
+      status: 206,
+      headers: { "Content-Range": `bytes ${start}-${end}/${zip.length}` },
+    });
+  };
+  const manifest: IndexManifest = {
+    schema_version: 4,
+    version: "plate-history-fixture",
+    generated_at: "2026-08-20T00:00:00Z",
+    source_fingerprint: "fixture",
+    source_label: "fixture",
+    source_url: "https://example.com",
+    repository: "owner/repo",
+    shard_prefix_length: 3,
+    max_events_per_vehicle: 50,
+    history_start_year: 2013,
+    plate_history_available: true,
+    archive_url_template: "https://example.com/index-{group}.zip",
+    counts: { vehicles: 2, plates: 1, events: 4, plate_assignments: 2 },
+  };
+
+  const result = await findPlateHistory(plate, manifest, 20, fetcher);
+  assert.equal(result.assignments.length, 2);
+  assert.equal(result.assignments[1]?.[1], "TMBJG7NE0J0123456");
+  assert.equal(result.totalAssignments, 2);
+  assert.equal(result.source, "plate-history");
 });

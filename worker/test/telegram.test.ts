@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { insuranceKeyboard, mainKeyboard, vehicleReportKeyboard } from "../src/telegram.js";
+import {
+  insuranceKeyboard,
+  mainKeyboard,
+  plateHistoryResultKeyboard,
+  vehicleReportKeyboard,
+} from "../src/telegram.js";
 
 test("main keyboard includes insurance search", () => {
   assert.match(JSON.stringify(mainKeyboard("uk")), /Перевірити страховку/);
   assert.match(JSON.stringify(mainKeyboard("ru")), /Проверить страховку/);
+  assert.match(JSON.stringify(mainKeyboard("uk")), /Історія номера/);
 });
 
 test("insurance button opens the official MTSBU service", () => {
@@ -18,6 +24,15 @@ test("vehicle report lets the user copy plate and VIN before opening MTSBU", () 
   assert.match(keyboard, /"copy_text":\{"text":"AA1234BB"\}/);
   assert.match(keyboard, /"copy_text":\{"text":"WVWZZZ3CZHE123456"\}/);
   assert.match(keyboard, /https:\/\/policy\.mtsbu\.ua\/Search\/Main\//);
+  assert.match(keyboard, /plate_history:AA1234BB/);
+});
+
+test("plate history result links VIN records back to vehicle reports", () => {
+  const keyboard = JSON.stringify(
+    plateHistoryResultKeyboard("ru", ["WVWZZZ3CZHE123456", null]),
+  );
+  assert.match(keyboard, /vehicle_vin:WVWZZZ3CZHE123456/);
+  assert.equal(keyboard.includes("vehicle_plate:"), false);
 });
 
 test("vehicle report omits copy buttons for unavailable identifiers", () => {

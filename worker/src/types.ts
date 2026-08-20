@@ -6,6 +6,8 @@ export interface Env {
   DEFAULT_LANGUAGE?: string;
   RATE_LIMIT_PER_MINUTE?: string;
   MAX_CANDIDATES?: string;
+  MAX_PLATE_HISTORY_CANDIDATES?: string;
+  VEHICLE_HISTORY_START_YEAR?: string;
 }
 
 export interface ExecutionContextLike {
@@ -26,11 +28,20 @@ export interface TelegramMessage {
   from?: TelegramUser;
   chat: TelegramChat;
   text?: string;
+  reply_to_message?: TelegramMessage;
+}
+
+export interface TelegramCallbackQuery {
+  id: string;
+  from: TelegramUser;
+  message?: TelegramMessage;
+  data?: string;
 }
 
 export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
+  callback_query?: TelegramCallbackQuery;
 }
 
 export type Language = "uk" | "ru";
@@ -54,6 +65,8 @@ export interface IndexManifest {
     [key: string]: number;
   };
   wanted?: WantedIndexManifest;
+  history_start_year?: number;
+  plate_history_available?: boolean;
 }
 
 export interface WantedIndexManifest {
@@ -128,4 +141,28 @@ export interface VehicleMatch {
   vehicle: CompactVehicle;
   matchedBy: "PLATE" | "VIN";
   candidates: number;
+}
+
+export type AssignmentConfidence = "HIGH" | "MEDIUM" | "LOW";
+
+export type CompactPlateAssignment = [
+  string,
+  string | null,
+  string | null,
+  string | null,
+  number | null,
+  string | null,
+  string | null,
+  string | null,
+  string | null,
+  number,
+  AssignmentConfidence,
+];
+
+export interface PlateHistoryResult {
+  plate: string;
+  assignments: CompactPlateAssignment[];
+  totalAssignments: number;
+  truncated: boolean;
+  source: "plate-history" | "vehicle-fallback";
 }

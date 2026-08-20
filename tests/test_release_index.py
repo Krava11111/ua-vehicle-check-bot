@@ -30,14 +30,21 @@ def test_builds_plate_and_vehicle_shards(tmp_path: Path) -> None:
     plate_archive_path = output / "archives" / f"index-{plate_shard[0]}.zip"
     with zipfile.ZipFile(plate_archive_path) as archive:
         plates = json.loads(gzip.decompress(archive.read(f"plates-{plate_shard}.json.gz")))
+        plate_history = json.loads(
+            gzip.decompress(archive.read(f"plate-history-{plate_shard}.json.gz"))
+        )
 
     assert vehicles[vin]["p"] == plate
     assert len(vehicles[vin]["e"]) == 2
     assert plates[plate] == [vin]
+    assert plate_history[plate][0][0] == vin
+    assert plate_history[plate][0][9] == 1
     assert manifest["counts"]["vehicles"] == 1
     assert manifest["counts"]["plates"] == 2
     assert "{group}" in manifest["archive_url_template"]
-    assert manifest["schema_version"] == 3
+    assert manifest["schema_version"] == 4
+    assert manifest["history_start_year"] == 2013
+    assert manifest["counts"]["plate_assignments"] == 2
     assert vehicles[vin]["e"][0][6] == "Чорний"
 
 
