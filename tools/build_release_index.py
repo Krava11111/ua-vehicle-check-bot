@@ -27,7 +27,7 @@ SOURCE_PAGE = f"https://data.gov.ua/dataset/{DATASET_ID}"
 SOURCE_LABEL = "МВС України / data.gov.ua"
 WANTED_SOURCE_PAGE = f"https://data.gov.ua/dataset/{WANTED_DATASET_ID}"
 WANTED_SOURCE_LABEL = "Національна поліція України / data.gov.ua"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 WANTED_SCHEMA_VERSION = 1
 DEFAULT_PREFIX_LENGTH = 3
 DEFAULT_MAX_EVENTS = 50
@@ -44,6 +44,7 @@ VIN_RE = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$")
 YEAR_RE = re.compile(r"(?<!\d)(20\d{2}|19\d{2})(?!\d)")
 
 ALIASES: dict[str, tuple[str, ...]] = {
+    "source_vehicle_id": ("source_vehicle_id", "vehicle_id"),
     "vin": ("vin", "vin_code"),
     "plate": ("n_reg_new", "plate", "number", "reg_number"),
     "registration_date": ("d_reg", "registration_date", "date_reg"),
@@ -359,7 +360,40 @@ def _compact_row(row: dict[str, str], mapping: dict[str, str]) -> CompactRow | N
     plate = normalize_plate(_text(row, mapping, "plate"))
     if not vin and not plate:
         return None
-    key = vin or f"P:{plate}"
+    source_vehicle_id = _text(row, mapping, "source_vehicle_id")
+    if vin:
+        key = vin
+    elif source_vehicle_id:
+        stable = hashlib.sha256(source_vehicle_id.encode()).hexdigest()[:24]
+        key = f"S:{stable}"
+    else:
+        # A plate can be reused on unrelated vehicles.  Without VIN or a stable
+        # source identifier, cluster only rows with the same core characteristics.
+        # Including the plate deliberately avoids linking a no-VIN vehicle across
+        # plate changes that cannot be proven from the open row alone.
+        characteristics = [
+            plate,
+            _text(row, mapping, "brand"),
+            _text(row, mapping, "model"),
+            _text(row, mapping, "year"),
+            _text(row, mapping, "engine_capacity"),
+            _text(row, mapping, "fuel_type"),
+            _text(row, mapping, "body_type"),
+            _text(row, mapping, "vehicle_type"),
+        ]
+        if any(value for value in characteristics[1:]):
+            raw = "|".join(str(value or "").strip().casefold() for value in characteristics)
+            key = f"F:{hashlib.sha256(raw.encode()).hexdigest()[:24]}"
+        else:
+            unresolved = [
+                plate,
+                _text(row, mapping, "registration_date"),
+                _text(row, mapping, "operation_code"),
+                _text(row, mapping, "operation_name"),
+                _text(row, mapping, "service_center"),
+            ]
+            raw = "|".join(str(value or "").strip().casefold() for value in unresolved)
+            key = f"U:{hashlib.sha256(raw.encode()).hexdigest()[:24]}"
     return CompactRow(
         key=key,
         vin=vin,
@@ -558,18 +592,10 @@ def _plate_spool_value(row: CompactRow) -> list[Any]:
 
 
 def _plate_assignment_identity(value: list[Any]) -> str:
-    _, vehicle_key, vin, registration_date, operation_code, operation_name, brand, model, year, color, vehicle_type, service_center = value
+    vehicle_key, vin = value[1], value[2]
     if vin:
         return f"vin:{vin}"
-    characteristics = [brand, model, year, color, vehicle_type]
-    if any(item is not None for item in characteristics):
-        raw = "|".join(str(item or "").strip().casefold() for item in characteristics)
-        return f"unknown:{hashlib.sha256(raw.encode()).hexdigest()[:20]}"
-    raw = "|".join(
-        str(item or "")
-        for item in [vehicle_key, registration_date, operation_code, operation_name, service_center]
-    )
-    return f"unresolved:{hashlib.sha256(raw.encode()).hexdigest()[:20]}"
+    return f"key:{vehicle_key}"
 
 
 def _merge_plate_assignment(assignments: dict[str, dict[str, Any]], value: list[Any]) -> None:

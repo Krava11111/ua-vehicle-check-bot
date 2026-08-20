@@ -143,6 +143,64 @@ export interface VehicleMatch {
   candidates: number;
 }
 
+export interface VehicleCandidate {
+  candidateId: string;
+  vehicleKey: string;
+  vin: string | null;
+  plate: string | null;
+  brand: string | null;
+  model: string | null;
+  year: number | null;
+  color: string | null;
+  fuel: string | null;
+  engineCapacity: number | null;
+  bodyType: string | null;
+  vehicleType: string | null;
+  firstSeenAt: string | null;
+  lastSeenAt: string | null;
+  registrationsCount: number;
+  confidence: AssignmentConfidence;
+}
+
+export interface VehicleReportData {
+  schemaVersion: 1;
+  reference: string;
+  collectedAt: string;
+  match: VehicleMatch;
+  wanted: WantedCheck;
+  insurance: {
+    status: "unavailable";
+    source: "MTSBU";
+    checkUrl: string;
+  };
+  externalHistory: {
+    auctions: "not_connected";
+    marketplace: "not_connected";
+    odometer: "not_connected";
+  };
+  source: {
+    label: string;
+    url: string;
+    updatedAt: string | null;
+    historyStartYear: number;
+    maxEventsPerVehicle: number;
+  };
+}
+
+export type FullReportSection =
+  | "registrations"
+  | "ownership"
+  | "plates"
+  | "vin"
+  | "import"
+  | "insurance"
+  | "auctions"
+  | "marketplace"
+  | "odometer"
+  | "analytics"
+  | "timeline"
+  | "sources";
+
 export type AssignmentConfidence = "HIGH" | "MEDIUM" | "LOW";
 
 export type CompactPlateAssignment = [

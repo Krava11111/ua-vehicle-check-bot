@@ -1,4 +1,4 @@
-import type { Language } from "./types.js";
+import type { FullReportSection, Language, VehicleCandidate } from "./types.js";
 
 export async function telegramCall(
   token: string,
@@ -11,9 +11,10 @@ export async function telegramCall(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(`Telegram ${method} failed: ${response.status}`);
   const result = (await response.json()) as { ok?: boolean; description?: string };
-  if (!result.ok) throw new Error(`Telegram ${method} failed: ${result.description ?? "unknown error"}`);
+  if (!response.ok || !result.ok) {
+    throw new Error(`Telegram ${method} failed: ${result.description ?? response.status}`);
+  }
 }
 
 export function mainKeyboard(language: Language): Record<string, unknown> {
@@ -75,13 +76,107 @@ export function vehicleReportKeyboard(
   return { inline_keyboard: rows };
 }
 
+export function candidateKeyboard(
+  language: Language,
+  plate: string,
+  candidates: VehicleCandidate[],
+): Record<string, unknown> {
+  const rows = candidates.slice(0, 10).map((candidate) => [{
+    text: `🚘 ${[candidate.brand, candidate.model].filter(Boolean).join(" ") || (language === "ru" ? "Автомобиль" : "Автомобіль")} · ${candidate.year ?? "—"}`,
+    callback_data: `pick:${plate}.${candidate.candidateId}`,
+  }]);
+  rows.push([{
+    text: language === "ru" ? "🔖 История самого номера" : "🔖 Історія самого номера",
+    callback_data: `plate_history:${plate}`,
+  }]);
+  return { inline_keyboard: rows };
+}
+
+export function basicReportKeyboard(
+  language: Language,
+  reference: string,
+  plate: string | null,
+): Record<string, unknown> {
+  const rows: Array<Array<Record<string, unknown>>> = [
+    [{ text: language === "ru" ? "📊 Полный отчёт" : "📊 Повний звіт", callback_data: `full:${reference}` }],
+    [{ text: language === "ru" ? "📋 Все регистрации" : "📋 Усі реєстрації", callback_data: `sec:registrations:${reference}` }],
+  ];
+  if (plate) rows.push([{
+    text: language === "ru" ? "🔖 История номера" : "🔖 Історія номера",
+    callback_data: `plate_history:${plate}`,
+  }]);
+  rows.push(
+    [{
+      text: language === "ru" ? "🛡 Проверить ОСАГО в МТСБУ" : "🛡 Перевірити ОСЦПВ у МТСБУ",
+      url: "https://policy.mtsbu.ua/Search/Main/",
+    }],
+    [{ text: language === "ru" ? "🔎 Новая проверка" : "🔎 Нова перевірка", callback_data: "new_search" }],
+  );
+  return { inline_keyboard: rows };
+}
+
+export function fullReportKeyboard(language: Language, reference: string): Record<string, unknown> {
+  const label = (ru: string, uk: string) => language === "ru" ? ru : uk;
+  return {
+    inline_keyboard: [
+      [
+        { text: label("📋 Регистрации", "📋 Реєстрації"), callback_data: `sec:registrations:${reference}` },
+        { text: label("👥 Владение", "👥 Володіння"), callback_data: `sec:ownership:${reference}` },
+      ],
+      [
+        { text: "🔢 VIN", callback_data: `sec:vin:${reference}` },
+        { text: label("🔖 Номера", "🔖 Номери"), callback_data: `sec:plates:${reference}` },
+      ],
+      [
+        { text: label("🌍 Импорт", "🌍 Імпорт"), callback_data: `sec:import:${reference}` },
+        { text: label("🛡 ОСАГО", "🛡 ОСЦПВ"), callback_data: `sec:insurance:${reference}` },
+      ],
+      [
+        { text: label("🇺🇸 США", "🇺🇸 США"), callback_data: `sec:auctions:${reference}` },
+        { text: label("🇺🇦 Продажи", "🇺🇦 Продажі"), callback_data: `sec:marketplace:${reference}` },
+      ],
+      [
+        { text: label("📊 Пробег", "📊 Пробіг"), callback_data: `sec:odometer:${reference}` },
+        { text: label("⚠️ Аналитика", "⚠️ Аналітика"), callback_data: `sec:analytics:${reference}` },
+      ],
+      [
+        { text: label("📅 Хронология", "📅 Хронологія"), callback_data: `sec:timeline:${reference}` },
+        { text: label("ℹ️ Источники", "ℹ️ Джерела"), callback_data: `sec:sources:${reference}` },
+      ],
+      [{ text: label("📄 Всё сразу", "📄 Усе одразу"), callback_data: `all:${reference}` }],
+      [{ text: label("⬅️ К авто", "⬅️ До авто"), callback_data: `back:${reference}` }],
+    ],
+  };
+}
+
+export function sectionKeyboard(
+  language: Language,
+  reference: string,
+  section?: FullReportSection,
+): Record<string, unknown> {
+  const rows: Array<Array<Record<string, unknown>>> = [];
+  if (section === "insurance") {
+    rows.push([{
+      text: language === "ru" ? "🛡 Проверить ОСАГО в МТСБУ" : "🛡 Перевірити ОСЦПВ у МТСБУ",
+      url: "https://policy.mtsbu.ua/Search/Main/",
+    }]);
+  }
+  rows.push([
+    { text: language === "ru" ? "⬅️ К разделам" : "⬅️ До розділів", callback_data: `full:${reference}` },
+    { text: language === "ru" ? "🚘 К авто" : "🚘 До авто", callback_data: `back:${reference}` },
+  ]);
+  return {
+    inline_keyboard: rows,
+  };
+}
+
 export function plateHistoryResultKeyboard(
   language: Language,
-  vins: Array<string | null>,
+  entries: Array<{ reference: string; label?: string }>,
 ): Record<string, unknown> {
-  const rows = vins.slice(0, 10).flatMap((vin, index) => vin ? [[{
-    text: language === "ru" ? `🚘 Проверить автомобиль #${index + 1}` : `🚘 Перевірити автомобіль #${index + 1}`,
-    callback_data: `vehicle_vin:${vin}`,
-  }]] : []);
+  const rows = entries.slice(0, 10).map((entry, index) => [{
+    text: entry.label || (language === "ru" ? `🚘 Проверить автомобиль #${index + 1}` : `🚘 Перевірити автомобіль #${index + 1}`),
+    callback_data: `pick:${entry.reference}`,
+  }]);
   return { inline_keyboard: rows };
 }

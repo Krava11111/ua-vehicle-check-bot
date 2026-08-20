@@ -18,6 +18,11 @@ using HTTP Range. The full MVS dataset and even the full ZIP are never stored on
    Plate history has its own compact shard, so it is not limited by the 50 recent events kept
    in a normal vehicle report.
 
+Index schema 5 identifies a vehicle by VIN first, then by a stable source identifier, and only
+then by a conservative characteristics fingerprint. A reused plate can therefore return several
+separate candidates; the user selects one before Starcar builds a report. Events belonging to
+different VINs or incompatible no-VIN clusters are never presented as one vehicle history.
+
 The official registration source is approximately monthly. The National Police wanted-vehicle
 source is published separately and normally changes daily. The report identifies its checked
 version and says only that a match was or was not found in that open dataset.
@@ -112,11 +117,17 @@ python ..\tools\build_release_index.py build-wanted \
   exceeds the Worker's 12 MB safety limit. In that case increase `--prefix-length` and publish a
   new manifest schema/layout.
 - The worker shows source attribution required by the dataset licence.
-- Every report contains a separate wanted-registry result, VIN/WMI analysis, import indicators,
-  estimated ownership changes, plate/region history, historical characteristic changes and
-  rapid-resale heuristics. These are explicitly marked as open-data matches or the service's own
-  analytics, never as a legal conclusion. A wanted-index failure is displayed as unavailable,
-  not converted to "no matches".
+- The basic report is one compact Telegram card with up to three important registration events,
+  insurance availability and the wanted-register result. Deep VIN, ownership, plate/region,
+  import and characteristics analysis lives in the navigable full report. Section buttons edit
+  the current message, and **all at once** is capped at three logical messages.
+- `VehicleReportAggregator` collects source results once, `VehicleReportData` is the normalized
+  report model, and `ReportRenderer` owns Telegram presentation. Report navigation reuses a
+  24-hour Cloudflare Cache API entry instead of repeating external checks or range reads.
+- Wanted matches and characteristic/resale indicators are explicitly marked as open-data matches
+  or Starcar analytics, never as a legal conclusion. A wanted-index failure is displayed as
+  unavailable, not converted to "no matches". No-VIN characteristic differences are labelled
+  uncertain and are not asserted as modifications of one vehicle.
 - The main menu and every report expose plate history. It lists all conservatively identified
   vehicle assignments for that plate in the available open-data period, warns that plates can
   be reused, and never describes the first known event as a proven first registration. Worker

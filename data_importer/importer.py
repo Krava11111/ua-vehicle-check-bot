@@ -44,10 +44,12 @@ def fingerprint(row: ImportRow, source: str) -> str:
     return hashlib.sha256("|".join(value or "" for value in parts).encode()).hexdigest()
 
 
-def obvious_conflict(vehicle: Vehicle, row: ImportRow) -> bool:
+def plate_cluster_conflict(vehicle: Vehicle, row: ImportRow) -> bool:
     if vehicle.normalized_vin and row.vin and vehicle.normalized_vin != row.vin:
         return True
     if vehicle.brand and row.brand and vehicle.brand.casefold() != row.brand.casefold():
+        return True
+    if vehicle.model and row.model and vehicle.model.casefold() != row.model.casefold():
         return True
     if vehicle.year and row.year and abs(vehicle.year - row.year) > 2:
         return True
@@ -57,6 +59,22 @@ def obvious_conflict(vehicle: Vehicle, row: ImportRow) -> bool:
         and vehicle.vehicle_type.casefold() != row.vehicle_type.casefold()
     ):
         return True
+    if (
+        vehicle.body_type
+        and row.body_type
+        and vehicle.body_type.casefold() != row.body_type.casefold()
+    ):
+        return True
+    if (
+        vehicle.fuel_type
+        and row.fuel_type
+        and vehicle.fuel_type.casefold() != row.fuel_type.casefold()
+    ):
+        return True
+    if vehicle.engine_capacity and row.engine_capacity:
+        tolerance = max(300, int(max(vehicle.engine_capacity, row.engine_capacity) * 0.2))
+        if abs(vehicle.engine_capacity - row.engine_capacity) > tolerance:
+            return True
     return False
 
 
@@ -109,6 +127,7 @@ class VehicleImporter:
                 await session.commit()
         if self.cache:
             await self.cache.delete_pattern("vehicle:*")
+            await self.cache.delete_pattern("plate_history:*")
         return stats
 
     async def _merge_row(
@@ -178,14 +197,18 @@ class VehicleImporter:
                     await session.scalars(select(Vehicle).where(Vehicle.normalized_vin == row.vin))
                 ).all()
             )
-            compatible = [item for item in matches if not obvious_conflict(item, row)]
-            if compatible:
-                return compatible[0]
+            # VIN is the primary stable vehicle identity. Characteristic differences
+            # within one VIN are retained for later validation instead of creating a
+            # second vehicle or falling back to the reusable plate.
+            if matches:
+                return matches[0]
         if row.source_vehicle_id:
             match = await session.scalar(
                 select(Vehicle).where(Vehicle.source_vehicle_id == row.source_vehicle_id)
             )
-            if match and not obvious_conflict(match, row):
+            if match and not (
+                match.normalized_vin and row.vin and match.normalized_vin != row.vin
+            ):
                 return match
         if row.plate:
             matches = list(
@@ -195,7 +218,7 @@ class VehicleImporter:
                     )
                 ).all()
             )
-            compatible = [item for item in matches if not obvious_conflict(item, row)]
+            compatible = [item for item in matches if not plate_cluster_conflict(item, row)]
             if len(compatible) == 1:
                 return compatible[0]
         return None
