@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { checkWanted, clearCachesForTests, findPlateHistory, findVehicles, sha256Prefix } from "../src/index-client.js";
+import { checkWanted, clearCachesForTests, findPlateHistory, findVehicles, orderVehicleKeysByLatestPlateUse, sha256Prefix } from "../src/index-client.js";
 import type { CompactPlateAssignment, CompactVehicle, IndexManifest, WantedRecord } from "../src/types.js";
 
 function storedZip(name: string, payload: Uint8Array): Uint8Array {
@@ -79,6 +79,18 @@ test("range-reads and decompresses one vehicle ZIP member", async () => {
   const matches = await findVehicles("VIN", vin, manifest, 3, fetcher);
   assert.equal(matches.length, 1);
   assert.equal(matches[0]?.vehicle.p, "KA3333CC");
+});
+
+test("orders reused-plate vehicles by the latest known assignment", () => {
+  const assignments: CompactPlateAssignment[] = [
+    ["old", null, "GEELY", "EMGRAND 7", 2013, null, null, "2013-10-25", "2013-10-25", 1, "LOW"],
+    ["latest", "WA1VAAGEXKB009123", "AUDI", "E-TRON", 2019, null, null, "2024-05-01", "2026-07-15", 2, "HIGH"],
+    ["middle", null, "SKODA", "OCTAVIA", 2018, null, null, "2020-01-01", "2023-03-10", 2, "MEDIUM"],
+  ];
+  assert.deepEqual(
+    orderVehicleKeysByLatestPlateUse(["middle", "old", "latest"], assignments),
+    ["latest", "middle", "old"],
+  );
 });
 
 test("range-reads wanted records by VIN", async () => {

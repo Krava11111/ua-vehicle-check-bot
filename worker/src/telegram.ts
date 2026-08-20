@@ -86,7 +86,7 @@ export function candidateKeyboard(
   candidates: VehicleCandidate[],
 ): Record<string, unknown> {
   const rows = candidates.slice(0, 10).map((candidate) => [{
-    text: `🚘 ${[candidate.brand, candidate.model].filter(Boolean).join(" ") || (language === "ru" ? "Автомобиль" : "Автомобіль")} · ${candidate.year ?? "—"}`,
+    text: `${candidate === candidates[0] ? "✅ " : "🚘 "}${[candidate.brand, candidate.model].filter(Boolean).join(" ") || (language === "ru" ? "Автомобиль" : "Автомобіль")} · ${candidate.year ?? "—"}`,
     callback_data: `pick:${plate}.${candidate.candidateId}`,
   }]);
   rows.push([{
@@ -102,6 +102,7 @@ export function basicReportKeyboard(
   plate: string | null,
   vin: string | null = null,
   bidfaxUrl: string | null = null,
+  hasOtherPlateVehicles = false,
 ): Record<string, unknown> {
   const rows: Array<Array<Record<string, unknown>>> = [
     [{ text: language === "ru" ? "📊 Полный отчёт" : "📊 Повний звіт", callback_data: `full:${reference}` }],
@@ -110,6 +111,10 @@ export function basicReportKeyboard(
   if (plate) rows.push([{
     text: language === "ru" ? "🔖 История номера" : "🔖 Історія номера",
     callback_data: `plate_history:${plate}`,
+  }]);
+  if (plate && hasOtherPlateVehicles) rows.push([{
+    text: language === "ru" ? "🚘 Другие авто на этом номере" : "🚘 Інші авто на цьому номері",
+    callback_data: `candidates:${plate}`,
   }]);
   if (vin) {
     rows.push([{

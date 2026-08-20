@@ -233,6 +233,22 @@ async function loadVehicle(
   return vehicles?.[key] ?? null;
 }
 
+export function orderVehicleKeysByLatestPlateUse(
+  keys: string[],
+  assignments: CompactPlateAssignment[],
+): string[] {
+  const latestByKey = new Map<string, string>();
+  for (const assignment of assignments) {
+    const key = assignment[0];
+    const date = assignment[8] ?? assignment[7] ?? "";
+    if (date > (latestByKey.get(key) ?? "")) latestByKey.set(key, date);
+  }
+  return [...keys].sort((left, right) => {
+    const dateOrder = (latestByKey.get(right) ?? "").localeCompare(latestByKey.get(left) ?? "");
+    return dateOrder || left.localeCompare(right);
+  });
+}
+
 export async function findVehicles(
   kind: "PLATE" | "VIN",
   normalized: string,
@@ -247,6 +263,15 @@ export async function findVehicles(
     const shard = await sha256Prefix(normalized, manifest.shard_prefix_length);
     const plates = await loadShardJson<Record<string, string[]>>(manifest, "plates", shard, fetcher);
     keys = plates?.[normalized] ?? [];
+    if (keys.length > 1 && (manifest.schema_version >= 4 || manifest.plate_history_available)) {
+      const histories = await loadShardJson<Record<string, CompactPlateAssignment[]>>(
+        manifest,
+        "plate-history",
+        shard,
+        fetcher,
+      );
+      keys = orderVehicleKeysByLatestPlateUse(keys, histories?.[normalized] ?? []);
+    }
   }
   const limited = keys.slice(0, Math.max(1, maxCandidates));
   const vehicles = await Promise.all(limited.map((key) => loadVehicle(key, manifest, fetcher)));

@@ -60,6 +60,7 @@ test("candidate selector separates Q7 and E-Tron", () => {
   ];
   const rendered = ReportRenderer.renderCandidateSelector("AA1234BB", candidates, "ru");
   assert.match(rendered, /найдено несколько автомобилей/);
+  assert.match(rendered, /Первым указано авто/);
   assert.match(rendered, /AUDI Q7/);
   assert.match(rendered, /2967 см³/);
   assert.match(rendered, /AUDI E-TRON/);

@@ -35,6 +35,12 @@ test("auction and basic report buttons expose Copart and BidFax without scraping
   assert.match(basic, /BidFax/);
 });
 
+test("latest plate report keeps older vehicle assignments available", () => {
+  const keyboard = JSON.stringify(basicReportKeyboard("ru", "AA1234BB.abcdef123456", "AA1234BB", null, null, true));
+  assert.match(keyboard, /Другие авто на этом номере/);
+  assert.match(keyboard, /candidates:AA1234BB/);
+});
+
 test("vehicle report lets the user copy plate and VIN before opening MTSBU", () => {
   const keyboard = JSON.stringify(vehicleReportKeyboard("ru", "AA1234BB", "WVWZZZ3CZHE123456"));
   assert.match(keyboard, /Скопировать номер AA1234BB/);

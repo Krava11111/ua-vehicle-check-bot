@@ -273,6 +273,7 @@ async function showBasicReport(
     report.match.vehicle.p,
     report.match.vehicle.v,
     report.externalHistory?.bidfaxUrl,
+    report.match.candidates > 1,
   );
   const text = ReportRenderer.renderBasicReport(report, language);
   if (typeof target === "number") await sendMessage(env, target, text, keyboard);
@@ -302,16 +303,8 @@ async function sendVehicleLookup(
     );
     return;
   }
-  if (query.kind === "PLATE" && matches.length > 1) {
-    const candidates = await buildVehicleCandidates(matches);
-    await sendMessage(
-      env,
-      chatId,
-      ReportRenderer.renderCandidateSelector(query.normalized, candidates, language),
-      candidateKeyboard(language, query.normalized, candidates),
-    );
-    return;
-  }
+  // Plate matches are sorted by their latest known assignment date. Show the
+  // newest one immediately; older assignments remain available from the card.
   await showBasicReport(await aggregate(matches[0] as VehicleMatch, loadedManifest, env), language, env, chatId);
 }
 
@@ -394,6 +387,20 @@ async function handleCallback(query: TelegramCallbackQuery, env: Env): Promise<v
     if (query.data.startsWith("plate_history:")) {
       const plate = normalizePlate(query.data.slice("plate_history:".length));
       if (plate) await sendPlateHistory(env, message.chat.id, language, plate);
+      return;
+    }
+    if (query.data.startsWith("candidates:")) {
+      const plate = normalizePlate(query.data.slice("candidates:".length));
+      if (!plate) return;
+      const manifest = await loadManifest(env.INDEX_MANIFEST_URL);
+      const matches = await findVehicles("PLATE", plate, manifest, maxCandidates(env));
+      const candidates = await buildVehicleCandidates(matches, plate);
+      await editMessage(
+        env,
+        message,
+        ReportRenderer.renderCandidateSelector(plate, candidates, language),
+        candidateKeyboard(language, plate, candidates),
+      );
       return;
     }
     if (query.data.startsWith("pick:")) {

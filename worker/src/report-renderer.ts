@@ -156,6 +156,9 @@ export class ReportRenderer {
         ? `🔎 <b>По номеру <code>${escapeHtml(plate)}</code> найдено несколько автомобилей</b>`
         : `🔎 <b>За номером <code>${escapeHtml(plate)}</code> знайдено кілька автомобілів</b>`,
       language === "ru" ? "\nВыберите автомобиль:" : "\nОберіть автомобіль:",
+      language === "ru"
+        ? "Первым указано авто с самой поздней известной записью этого номера."
+        : "Першим зазначено авто з найпізнішим відомим записом цього номера.",
     ];
     candidates.forEach((candidate, index) => {
       const vehicleTitle = [candidate.brand, candidate.model].filter(Boolean).map(escapeHtml).join(" ") || unknown(language);
@@ -165,7 +168,7 @@ export class ReportRenderer {
         `\n${index + 1}️⃣ <b>${vehicleTitle}</b>`,
         details || unknown(language),
         candidate.vin ? `VIN: <code>${escapeHtml(candidate.vin)}</code>` : (language === "ru" ? "VIN: нет в доступных данных" : "VIN: немає у доступних даних"),
-        `${language === "ru" ? "Последнее известное событие" : "Остання відома подія"}: ${formatDate(candidate.lastSeenAt)}`,
+        `${language === "ru" ? "Последняя известная запись этого номера" : "Останній відомий запис цього номера"}: ${formatDate(candidate.lastSeenAt)}`,
       );
     });
     lines.push(language === "ru"

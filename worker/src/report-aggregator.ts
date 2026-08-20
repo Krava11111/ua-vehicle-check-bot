@@ -25,10 +25,12 @@ export function referenceParts(reference: string): { plate: string | null; candi
   return { plate: match[1] === "N" ? null : match[1], candidateId: match[2] };
 }
 
-export async function buildVehicleCandidates(matches: VehicleMatch[]): Promise<VehicleCandidate[]> {
+export async function buildVehicleCandidates(matches: VehicleMatch[], queriedPlate?: string): Promise<VehicleCandidate[]> {
   return Promise.all(matches.map(async (match) => {
     const events = orderedEvents(match.vehicle.e ?? []);
-    const dates = events.map((event) => event[0]).filter((value): value is string => Boolean(value));
+    const plateEvents = queriedPlate ? events.filter((event) => event[3] === queriedPlate) : [];
+    const relevantEvents = plateEvents.length ? plateEvents : events;
+    const dates = relevantEvents.map((event) => event[0]).filter((value): value is string => Boolean(value));
     return {
       candidateId: await candidateId(match.key),
       vehicleKey: match.key,
@@ -44,7 +46,7 @@ export async function buildVehicleCandidates(matches: VehicleMatch[]): Promise<V
       vehicleType: match.vehicle.k,
       firstSeenAt: dates[0] ?? null,
       lastSeenAt: dates.at(-1) ?? null,
-      registrationsCount: events.length,
+      registrationsCount: relevantEvents.length,
       confidence: match.vehicle.v ? "HIGH" : match.key.startsWith("F:") || match.key.startsWith("S:") ? "MEDIUM" : "LOW",
     };
   }));
