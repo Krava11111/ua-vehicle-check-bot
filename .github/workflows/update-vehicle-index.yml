@@ -1,0 +1,99 @@
+name: Update vehicle release index
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even when CKAN metadata is unchanged
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: "23 3 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vehicle-release-index
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read official dataset metadata
+        run: |
+          mkdir -p .index-work/current
+          python tools/build_release_index.py metadata \
+            --from-year 2013 \
+            --output .index-work/source.json
+          gh release download vehicle-data-current \
+            --pattern manifest.json \
+            --dir .index-work/current || true
+
+      - name: Check whether the source changed
+        id: check
+        run: |
+          python tools/build_release_index.py changed \
+            --metadata .index-work/source.json \
+            --manifest .index-work/current/manifest.json \
+            --github-output "$GITHUB_OUTPUT"
+          if [ "${{ inputs.force || false }}" = "true" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build sharded index
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          python tools/build_release_index.py build \
+            --metadata .index-work/source.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --prefix-length 3 \
+            --max-events 50 \
+            --output release-index
+
+      - name: Publish immutable archive releases
+        if: steps.check.outputs.changed == 'true'
+        shell: bash
+        run: |
+          version="$(python -c 'import json; print(json.load(open("release-index/manifest.json", encoding="utf-8"))["version"])')"
+          for archive in release-index/archives/index-*.zip; do
+            [ -f "$archive" ] || continue
+            group="$(basename "$archive" .zip)"
+            group="${group#index-}"
+            tag="vehicle-data-${version}-${group}"
+            if ! gh release view "$tag" >/dev/null 2>&1; then
+              gh release create "$tag" \
+                --title "Vehicle index ${version} / ${group}" \
+                --notes "Generated automatically from the official MVS open-data dataset. Source attribution is recorded in manifest.json." \
+                --latest=false
+            fi
+            gh release upload "$tag" "$archive" --clobber
+          done
+
+      - name: Publish current manifest last
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          if ! gh release view vehicle-data-current >/dev/null 2>&1; then
+            gh release create vehicle-data-current \
+              --title "Current vehicle index manifest" \
+              --notes "Stable manifest for the Telegram Cloudflare Worker." \
+              --latest=false
+          fi
+          gh release upload vehicle-data-current release-index/manifest.json --clobber
+
+      - name: Summary
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          python -c 'import json; m=json.load(open("release-index/manifest.json", encoding="utf-8")); print("### Vehicle index " + m["version"]); print(); print("```json"); print(json.dumps(m["counts"], indent=2)); print("```")' >> "$GITHUB_STEP_SUMMARY"

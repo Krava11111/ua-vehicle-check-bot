@@ -1,0 +1,15 @@
+name = "ua-vehicle-check-bot"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+workers_dev = true
+
+[vars]
+INDEX_MANIFEST_URL = "https://github.com/Krava11111/ua-vehicle-check-bot/releases/download/vehicle-data-current/manifest.json"
+DEFAULT_LANGUAGE = "uk"
+RATE_LIMIT_PER_MINUTE = "10"
+MAX_CANDIDATES = "3"
+
+# Add secrets with:
+#   npx wrangler secret put BOT_TOKEN
+#   npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
+#   npx wrangler secret put WEBHOOK_SECRET_PATH

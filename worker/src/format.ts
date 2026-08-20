@@ -1,0 +1,58 @@
+import type { CompactEvent, IndexManifest, Language, VehicleMatch } from "./types.js";
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+function formatDate(value: string | null): string | null {
+  if (!value) return null;
+  const [year, month, day] = value.split("-");
+  return year && month && day ? `${day}.${month}.${year}` : value;
+}
+
+function latestEvent(events: CompactEvent[]): CompactEvent | undefined {
+  return [...events].sort((left, right) => (left[0] ?? "").localeCompare(right[0] ?? "")).at(-1);
+}
+
+export function renderVehicle(match: VehicleMatch, manifest: IndexManifest, language: Language): string {
+  const vehicle = match.vehicle;
+  const unknown = language === "ru" ? "нет данных" : "немає даних";
+  const events = vehicle.e ?? [];
+  const ordered = [...events].sort((left, right) => (left[0] ?? "").localeCompare(right[0] ?? ""));
+  const first = ordered[0];
+  const last = latestEvent(ordered);
+  const regions = [...new Set(ordered.map((event) => event[4]).filter(Boolean))] as string[];
+  const title = [vehicle.b, vehicle.m].filter(Boolean).map(escapeHtml).join(" ") || unknown;
+  const lines = [`🚘 <b>${title}</b>`];
+  if (match.candidates > 1) {
+    lines.push(language === "ru" ? `\n⚠️ Возможных совпадений: ${match.candidates}` : `\n⚠️ Можливих збігів: ${match.candidates}`);
+  }
+  lines.push(
+    `\n🔢 VIN: <code>${escapeHtml(vehicle.v || unknown)}</code>`,
+    `🔖 ${language === "ru" ? "Номер" : "Номер"}: <code>${escapeHtml(vehicle.p || unknown)}</code>`,
+    `📅 ${language === "ru" ? "Год" : "Рік"}: ${vehicle.y ?? unknown}`,
+    `🎨 ${language === "ru" ? "Цвет" : "Колір"}: ${escapeHtml(vehicle.c || unknown)}`,
+    `⛽ ${language === "ru" ? "Топливо" : "Паливо"}: ${escapeHtml(vehicle.f || unknown)}`,
+    `⚙️ ${language === "ru" ? "Двигатель" : "Двигун"}: ${vehicle.ec ? `${vehicle.ec} см³` : unknown}`,
+    `🚗 ${language === "ru" ? "Тип" : "Тип"}: ${escapeHtml(vehicle.k || unknown)}`,
+    `🧩 ${language === "ru" ? "Кузов" : "Кузов"}: ${escapeHtml(vehicle.bt || unknown)}`,
+    `\n📋 ${language === "ru" ? "Регистрационных событий" : "Реєстраційних подій"}: ${events.length}`,
+    `${language === "ru" ? "Первая известная регистрация" : "Перша відома реєстрація"}: ${formatDate(first?.[0] ?? null) || unknown}`,
+    `${language === "ru" ? "Последняя операция" : "Остання операція"}: ${formatDate(last?.[0] ?? null) || unknown}`,
+    `📍 ${language === "ru" ? "Последний известный регион" : "Останній відомий регіон"}: ${escapeHtml(regions.at(-1) || unknown)}`,
+  );
+  const history = ordered.slice(-10);
+  if (history.length) {
+    lines.push(language === "ru" ? "\n📋 <b>Последние операции</b>" : "\n📋 <b>Останні операції</b>");
+    for (const event of history) {
+      const details = event[2] || event[1] || unknown;
+      const plate = event[3] ? ` · ${escapeHtml(event[3])}` : "";
+      const region = event[4] ? ` · ${escapeHtml(event[4])}` : "";
+      lines.push(`\n${formatDate(event[0]) || unknown}${plate}${region}\n${escapeHtml(details)}`);
+    }
+  }
+  const freshness = manifest.dataset_updated_at ? formatDate(manifest.dataset_updated_at.slice(0, 10)) : null;
+  lines.push(`\n${language === "ru" ? "Источник" : "Джерело"}: <a href="${escapeHtml(manifest.source_url)}">${escapeHtml(manifest.source_label)}</a>`);
+  if (freshness) lines.push(`${language === "ru" ? "Обновлено источником" : "Оновлено джерелом"}: ${freshness}`);
+  return lines.join("\n").slice(0, 4096);
+}

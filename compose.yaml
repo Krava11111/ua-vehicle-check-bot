@@ -1,0 +1,70 @@
+name: ua-auto-check
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-autocheck}
+      POSTGRES_USER: ${POSTGRES_USER:-autocheck}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+
+  bot:
+    build: .
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - dataset_data:/data
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    stop_grace_period: 30s
+    security_opt: ["no-new-privileges:true"]
+
+  worker:
+    build: .
+    env_file: .env
+    entrypoint: ["python", "-m", "data_importer"]
+    command: ["--help"]
+    profiles: ["tools"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - dataset_data:/data
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  postgres_data:
+  redis_data:
+  dataset_data:

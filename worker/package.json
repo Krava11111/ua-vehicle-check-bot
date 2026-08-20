@@ -1,0 +1,16 @@
+{
+  "name": "ukraine-vehicle-telegram-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "check": "tsc --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "wrangler": "^4.31.0"
+  }
+}
