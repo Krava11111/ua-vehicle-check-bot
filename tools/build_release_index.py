@@ -16,7 +16,7 @@ import zipfile
 from collections import OrderedDict
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, BinaryIO, TextIO
 
@@ -125,7 +125,7 @@ class CompactRow:
         ]
 
     @classmethod
-    def from_spool_value(cls, value: list[Any]) -> "CompactRow":
+    def from_spool_value(cls, value: list[Any]) -> CompactRow:
         return cls(*value)
 
 
@@ -348,6 +348,25 @@ def _iter_csv_stream(binary: BinaryIO) -> Iterator[CompactRow]:
             yield row
 
 
+def _looks_like_supported_csv(archive: zipfile.ZipFile, member: zipfile.ZipInfo) -> bool:
+    """Detect CSV content when an official ZIP has a corrupted/non-ASCII file extension."""
+    if member.is_dir() or member.file_size <= 0:
+        return False
+    with archive.open(member) as stream:
+        sample = stream.read(65536)
+    if not sample or sample.count(b"\x00") > len(sample) // 20:
+        return False
+    encoding = _detect_encoding(sample)
+    text = sample.decode(encoding, errors="replace")
+    delimiter = _detect_delimiter(text)
+    try:
+        headers = next(csv.reader(io.StringIO(text), delimiter=delimiter))
+        _column_map(headers)
+    except (StopIteration, csv.Error, ValueError):
+        return False
+    return True
+
+
 class _PrefixedStream(io.RawIOBase):
     def __init__(self, prefix: bytes, stream: BinaryIO) -> None:
         self.prefix = memoryview(prefix)
@@ -378,7 +397,13 @@ def _iter_rows(path: Path) -> Iterator[CompactRow]:
         with zipfile.ZipFile(path) as archive:
             members = [item for item in archive.infolist() if not item.is_dir() and item.filename.lower().endswith(".csv")]
             if not members:
-                raise ValueError(f"No CSV files in {path.name}")
+                members = [
+                    item for item in archive.infolist()
+                    if _looks_like_supported_csv(archive, item)
+                ]
+            if not members:
+                names = ", ".join(ascii(item.filename) for item in archive.infolist()[:10])
+                raise ValueError(f"No supported CSV content in {path.name}; members: {names}")
             for member in members:
                 with archive.open(member) as stream:
                     yield from _iter_csv_stream(stream)
@@ -497,14 +522,23 @@ def build_index(
     try:
         downloads = work / "downloads"
         downloads.mkdir()
-        for resource in metadata["resources"]:
+        resource_total = len(metadata["resources"])
+        for resource_index, resource in enumerate(metadata["resources"], start=1):
+            print(
+                f"[{resource_index}/{resource_total}] Processing "
+                f"{resource.get('name') or resource.get('url')} ({resource.get('year') or 'unknown year'})",
+                flush=True,
+            )
             path = _download(resource, downloads)
+            resource_rows = 0
             for row in _iter_rows(path):
                 rows_seen += 1
                 valid_rows += 1
+                resource_rows += 1
                 vehicle_writers.write(shard_for(row.key, prefix_length), row.spool_value())
                 if row.plate:
                     plate_writers.write(shard_for(row.plate, prefix_length), [row.plate, row.key])
+            print(f"[{resource_index}/{resource_total}] Accepted {resource_rows:,} rows", flush=True)
             if not str(resource["url"]).startswith("file:"):
                 path.unlink(missing_ok=True)
         vehicle_writers.close()

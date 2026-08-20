@@ -43,3 +43,22 @@ def test_builds_plate_and_vehicle_shards(tmp_path: Path) -> None:
 def test_shards_are_stable() -> None:
     assert shard_for("AA1234BB", 3) == shard_for("AA1234BB", 3)
     assert len(shard_for("AA1234BB", 3)) == 3
+
+
+def test_detects_csv_with_corrupted_extension(tmp_path: Path) -> None:
+    fixture = Path(__file__).parent / "fixtures" / "vehicles.csv"
+    archive_path = tmp_path / "official-2019.zip"
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.write(fixture, arcname="vehicles.сsv")  # Cyrillic 'с', as seen in official data.
+
+    output = tmp_path / "index"
+    manifest = build_index(
+        local_metadata([archive_path]),
+        output,
+        repository="example/vehicle-bot",
+        prefix_length=3,
+        max_events=50,
+    )
+
+    assert manifest["counts"]["vehicles"] == 1
+    assert manifest["counts"]["valid_rows"] == 2
