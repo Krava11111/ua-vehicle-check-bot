@@ -5,7 +5,7 @@ import json
 import zipfile
 from pathlib import Path
 
-from tools.build_release_index import build_index, local_metadata, shard_for
+from tools.build_release_index import build_index, build_wanted_index, local_metadata, shard_for
 
 
 def test_builds_plate_and_vehicle_shards(tmp_path: Path) -> None:
@@ -37,7 +37,8 @@ def test_builds_plate_and_vehicle_shards(tmp_path: Path) -> None:
     assert manifest["counts"]["vehicles"] == 1
     assert manifest["counts"]["plates"] == 2
     assert "{group}" in manifest["archive_url_template"]
-    assert manifest["schema_version"] == 2
+    assert manifest["schema_version"] == 3
+    assert vehicles[vin]["e"][0][6] == "Чорний"
 
 
 def test_shards_are_stable() -> None:
@@ -62,3 +63,33 @@ def test_detects_csv_with_corrupted_extension(tmp_path: Path) -> None:
 
     assert manifest["counts"]["vehicles"] == 1
     assert manifest["counts"]["valid_rows"] == 2
+
+
+def test_builds_wanted_index_for_plate_and_vin(tmp_path: Path) -> None:
+    fixture = Path(__file__).parent / "fixtures" / "wanted.json"
+    output = tmp_path / "wanted-index"
+    metadata = {
+        "dataset_modified": "2026-08-20T07:16:39Z",
+        "source_fingerprint": "a" * 64,
+        "source_page": "https://data.gov.ua/dataset/wanted",
+        "resource": {
+            "name": "CarsWanted.json",
+            "url": fixture.resolve().as_uri(),
+            "modified": "2026-08-20T07:15:11Z",
+        },
+    }
+
+    manifest = build_wanted_index(metadata, output, "example/vehicle-bot", prefix_length=3)
+
+    vin = "WVWZZZ3CZHE123456"
+    plate = "KA3333CC"
+    for identifier in (vin, plate):
+        shard = shard_for(identifier, 3)
+        archive_path = output / "archives" / f"wanted-index-{shard[0]}.zip"
+        with zipfile.ZipFile(archive_path) as archive:
+            wanted = json.loads(gzip.decompress(archive.read(f"wanted-{shard}.json.gz")))
+        assert wanted[identifier][0][0] == "wanted-1"
+
+    assert manifest["counts"]["indexed_records"] == 2
+    assert manifest["counts"]["identifiers"] == 4
+    assert "wanted-data-{version}/wanted-index-{group}" in manifest["archive_url_template"]

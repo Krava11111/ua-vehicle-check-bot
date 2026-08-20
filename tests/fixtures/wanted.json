@@ -1,0 +1,30 @@
+[
+  {
+    "id": "wanted-1",
+    "brand": "VOLKSWAGEN",
+    "model": "PASSAT",
+    "cartype": "Легковий автотранспорт",
+    "color": "ЧОРНИЙ",
+    "vehiclenumber": "КА3333СС",
+    "bodynumber": "WVWZZZ3CZHE123456",
+    "chassisnumber": null,
+    "enginenumber": null,
+    "illegalseizuredate": "2026-08-18T12:30:00",
+    "organunit": "ГУНП",
+    "insertdate": "2026-08-18T00:00:00"
+  },
+  {
+    "id": "wanted-2",
+    "brand": "ВАЗ",
+    "model": "2107",
+    "cartype": "Легковий автотранспорт",
+    "color": "БІЛИЙ",
+    "vehiclenumber": "АА1234ВВ",
+    "bodynumber": "XTA21070000000001",
+    "chassisnumber": null,
+    "enginenumber": null,
+    "illegalseizuredate": "2025-01-02T09:00:00",
+    "organunit": "ГУНП",
+    "insertdate": "2025-01-02T00:00:00"
+  }
+]

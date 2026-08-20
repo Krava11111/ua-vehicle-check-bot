@@ -18,13 +18,17 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, BinaryIO, TextIO
+from typing import Any, BinaryIO, TextIO, cast
 
 DATASET_ID = "06779371-308f-42d7-895e-5a39833375f0"
+WANTED_DATASET_ID = "ac1a3a9d-512b-446b-9b0c-1383d38ce474"
 CKAN_PACKAGE_URL = "https://data.gov.ua/api/3/action/package_show?id={dataset_id}"
 SOURCE_PAGE = f"https://data.gov.ua/dataset/{DATASET_ID}"
 SOURCE_LABEL = "МВС України / data.gov.ua"
-SCHEMA_VERSION = 2
+WANTED_SOURCE_PAGE = f"https://data.gov.ua/dataset/{WANTED_DATASET_ID}"
+WANTED_SOURCE_LABEL = "Національна поліція України / data.gov.ua"
+SCHEMA_VERSION = 3
+WANTED_SCHEMA_VERSION = 1
 DEFAULT_PREFIX_LENGTH = 3
 DEFAULT_MAX_EVENTS = 50
 MAX_GITHUB_RELEASE_ASSET_BYTES = 2_000_000_000
@@ -188,7 +192,12 @@ def load_dataset_metadata(
     if not resources:
         raise RuntimeError(f"No CSV/ZIP resources found for years {from_year}-{to_year}")
     fingerprint_payload = json.dumps(
-        [item.serializable() for item in resources], ensure_ascii=False, sort_keys=True
+        {
+            "schema_version": SCHEMA_VERSION,
+            "resources": [item.serializable() for item in resources],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
     ).encode("utf-8")
     fingerprint = hashlib.sha256(fingerprint_payload).hexdigest()
     return {
@@ -201,6 +210,44 @@ def load_dataset_metadata(
         "from_year": from_year,
         "to_year": to_year,
         "resources": [item.serializable() for item in resources],
+    }
+
+
+def load_wanted_metadata(dataset_id: str = WANTED_DATASET_ID) -> dict[str, Any]:
+    payload = _request_json(CKAN_PACKAGE_URL.format(dataset_id=dataset_id))
+    if not payload.get("success"):
+        raise RuntimeError("data.gov.ua returned an unsuccessful CKAN response for wanted vehicles")
+    package = payload["result"]
+    candidates = [
+        raw for raw in package.get("resources", [])
+        if str(raw.get("format") or "").lower() == "json"
+        and "schema" not in str(raw.get("name") or "").lower()
+    ]
+    if not candidates:
+        raise RuntimeError("CarsWanted JSON resource was not found")
+    resource = max(
+        candidates,
+        key=lambda raw: str(raw.get("last_modified") or raw.get("metadata_modified") or ""),
+    )
+    serialized = {
+        "name": resource.get("name"),
+        "url": resource.get("url"),
+        "modified": resource.get("last_modified") or resource.get("metadata_modified"),
+        "checksum": resource.get("file_hash_sum") or resource.get("hash") or None,
+        "resource_id": resource.get("id"),
+        "size": resource.get("size"),
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(serialized, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return {
+        "schema_version": WANTED_SCHEMA_VERSION,
+        "dataset_id": dataset_id,
+        "dataset_title": package.get("title"),
+        "dataset_modified": package.get("metadata_modified"),
+        "source_page": f"https://data.gov.ua/dataset/{dataset_id}",
+        "source_fingerprint": fingerprint,
+        "resource": serialized,
     }
 
 
@@ -339,7 +386,8 @@ def _iter_csv_stream(binary: BinaryIO) -> Iterator[CompactRow]:
     encoding = _detect_encoding(sample)
     sample_text = sample.decode(encoding, errors="replace")
     delimiter = _detect_delimiter(sample_text)
-    stream = io.TextIOWrapper(io.BufferedReader(_PrefixedStream(sample, binary)), encoding=encoding, newline="")
+    prefixed = _PrefixedStream(sample, binary)
+    stream = io.TextIOWrapper(io.BufferedReader(prefixed), encoding=encoding, newline="")  # type: ignore[type-var]
     reader = csv.DictReader(stream, delimiter=delimiter)
     mapping = _column_map(list(reader.fieldnames or []))
     for raw in reader:
@@ -376,7 +424,7 @@ class _PrefixedStream(io.RawIOBase):
     def readable(self) -> bool:
         return True
 
-    def readinto(self, buffer: bytearray) -> int:
+    def readinto(self, buffer: Any) -> int:
         target = memoryview(buffer)
         written = 0
         if self.position < len(self.prefix):
@@ -406,7 +454,7 @@ def _iter_rows(path: Path) -> Iterator[CompactRow]:
                 raise ValueError(f"No supported CSV content in {path.name}; members: {names}")
             for member in members:
                 with archive.open(member) as stream:
-                    yield from _iter_csv_stream(stream)
+                    yield from _iter_csv_stream(cast(BinaryIO, stream))
     else:
         with path.open("rb") as stream:
             yield from _iter_csv_stream(stream)
@@ -418,7 +466,8 @@ def _download(resource: dict[str, Any], target_dir: Path) -> Path:
         from urllib.parse import unquote, urlparse
 
         return Path(unquote(urlparse(url).path.lstrip("/"))) if os.name == "nt" else Path(unquote(urlparse(url).path))
-    suffix = ".zip" if ".zip" in url.lower().split("?", 1)[0] else ".csv"
+    lowered_url = url.lower().split("?", 1)[0]
+    suffix = ".zip" if ".zip" in lowered_url else ".json" if ".json" in lowered_url else ".csv"
     target = target_dir / f"{resource.get('year') or 'resource'}-{hashlib.sha256(url.encode()).hexdigest()[:8]}{suffix}"
     request = urllib.request.Request(url, headers={"User-Agent": "autocheck-release-index/1.0"})
     with urllib.request.urlopen(request, timeout=300) as response, target.open("wb") as output:
@@ -427,7 +476,22 @@ def _download(resource: dict[str, Any], target_dir: Path) -> Path:
 
 
 def _event(row: CompactRow) -> list[Any]:
-    return [row.registration_date, row.operation_code, row.operation_name, row.plate, row.region, row.service_center]
+    return [
+        row.registration_date,
+        row.operation_code,
+        row.operation_name,
+        row.plate,
+        row.region,
+        row.service_center,
+        row.color,
+        row.fuel_type,
+        row.engine_capacity,
+        row.body_type,
+        row.purpose,
+        row.own_weight,
+        row.total_weight,
+        row.vehicle_type,
+    ]
 
 
 def _event_key(event: list[Any]) -> str:
@@ -482,12 +546,16 @@ def _gzip_json(path: Path, value: Any) -> None:
             zipped.write(payload)
 
 
-def _pack_group_archives(assets: Path, archives: Path) -> dict[str, int]:
+def _pack_group_archives(
+    assets: Path,
+    archives: Path,
+    archive_prefix: str = "index",
+) -> dict[str, int]:
     """Pack gzip shards without recompressing them so a Worker can HTTP-range-read one member."""
     archives.mkdir(parents=True, exist_ok=True)
     sizes: dict[str, int] = {}
     for group_dir in sorted(path for path in assets.iterdir() if path.is_dir()):
-        archive_path = archives / f"index-{group_dir.name}.zip"
+        archive_path = archives / f"{archive_prefix}-{group_dir.name}.zip"
         with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED, allowZip64=False) as archive:
             for shard_path in sorted(group_dir.glob("*.json.gz")):
                 if shard_path.stat().st_size > MAX_WORKER_SHARD_BYTES:
@@ -627,6 +695,126 @@ def build_index(
         shutil.rmtree(work, ignore_errors=True)
 
 
+def _wanted_text(row: dict[str, Any], key: str) -> str | None:
+    value = row.get(key)
+    text = str(value).strip() if value is not None else ""
+    return text or None
+
+
+def _wanted_date(value: str | None) -> str | None:
+    if not value:
+        return None
+    return _iso_date(value[:10])
+
+
+def build_wanted_index(
+    metadata: dict[str, Any],
+    output_dir: Path,
+    repository: str,
+    prefix_length: int = DEFAULT_PREFIX_LENGTH,
+) -> dict[str, Any]:
+    if not re.fullmatch(r"[0-9a-f]{1,4}", "f" * prefix_length):
+        raise ValueError("prefix length must be between 1 and 4")
+    work = Path(tempfile.mkdtemp(prefix="wanted-release-index-"))
+    writers = LruWriters(work / "wanted-spool")
+    records_seen = 0
+    indexed_records = 0
+    identifier_links = 0
+    try:
+        downloads = work / "downloads"
+        downloads.mkdir()
+        path = _download(metadata["resource"], downloads)
+        with path.open("r", encoding="utf-8-sig") as stream:
+            payload = json.load(stream)
+        if not isinstance(payload, list):
+            raise ValueError("CarsWanted JSON root must be an array")
+        for raw in payload:
+            records_seen += 1
+            if not isinstance(raw, dict):
+                continue
+            plate = normalize_plate(_wanted_text(raw, "vehiclenumber"))
+            body_vin = normalize_vin(_wanted_text(raw, "bodynumber"))
+            chassis_vin = normalize_vin(_wanted_text(raw, "chassisnumber"))
+            record_identifiers = sorted({value for value in (plate, body_vin, chassis_vin) if value})
+            if not record_identifiers:
+                continue
+            record = [
+                _wanted_text(raw, "id"),
+                plate,
+                body_vin,
+                chassis_vin,
+                _wanted_text(raw, "brand"),
+                _wanted_text(raw, "model"),
+                _wanted_text(raw, "color"),
+                _wanted_date(_wanted_text(raw, "illegalseizuredate")),
+                _wanted_date(_wanted_text(raw, "insertdate")),
+                _wanted_text(raw, "cartype"),
+            ]
+            indexed_records += 1
+            for identifier in record_identifiers:
+                writers.write(shard_for(identifier, prefix_length), [identifier, record])
+                identifier_links += 1
+        writers.close()
+
+        assets = output_dir / "assets"
+        assets.mkdir(parents=True, exist_ok=True)
+        identifiers_count = 0
+        nonempty_shards = 0
+        for spool in sorted((work / "wanted-spool").glob("*.jsonl")):
+            shard_identifiers: dict[str, dict[str, list[Any]]] = {}
+            with spool.open("r", encoding="utf-8") as stream:
+                for line in stream:
+                    identifier, record = json.loads(line)
+                    record_key = str(record[0] or _event_key(record))
+                    shard_identifiers.setdefault(identifier, {})[record_key] = record
+            serialized = {
+                identifier: [records[key] for key in sorted(records)]
+                for identifier, records in shard_identifiers.items()
+            }
+            shard = spool.stem
+            _gzip_json(assets / shard[0] / f"wanted-{shard}.json.gz", serialized)
+            identifiers_count += len(serialized)
+            nonempty_shards += 1
+
+        archives = output_dir / "archives"
+        archive_sizes = _pack_group_archives(assets, archives, "wanted-index")
+        shutil.rmtree(assets)
+        modified = str(metadata.get("resource", {}).get("modified") or metadata.get("dataset_modified") or "")
+        stamp = re.sub(r"[^0-9]", "", modified)[:14] or datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+        version = f"{stamp}-{metadata['source_fingerprint'][:12]}"
+        manifest = {
+            "schema_version": WANTED_SCHEMA_VERSION,
+            "version": version,
+            "generated_at": datetime.now(UTC).isoformat(),
+            "dataset_updated_at": metadata.get("resource", {}).get("modified") or metadata.get("dataset_modified"),
+            "source_fingerprint": metadata["source_fingerprint"],
+            "source_label": WANTED_SOURCE_LABEL,
+            "source_url": metadata.get("source_page") or WANTED_SOURCE_PAGE,
+            "shard_prefix_length": prefix_length,
+            "archive_url_template": (
+                f"https://github.com/{repository}/releases/download/"
+                "wanted-data-{version}/wanted-index-{group}.zip"
+            ),
+            "counts": {
+                "input_records": records_seen,
+                "indexed_records": indexed_records,
+                "identifiers": identifiers_count,
+                "identifier_links": identifier_links,
+                "shards": nonempty_shards,
+                "archives": len(archive_sizes),
+                "archive_bytes": sum(archive_sizes.values()),
+            },
+        }
+        (output_dir / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return manifest
+    finally:
+        writers.close()
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def _read_json(path: Path) -> dict[str, Any] | None:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -636,6 +824,13 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 def command_metadata(args: argparse.Namespace) -> int:
     metadata = load_dataset_metadata(args.dataset_id, args.from_year, args.to_year)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return 0
+
+
+def command_wanted_metadata(args: argparse.Namespace) -> int:
+    metadata = load_wanted_metadata(args.dataset_id)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return 0
@@ -653,7 +848,25 @@ def command_changed(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_wanted_changed(args: argparse.Namespace) -> int:
+    metadata = _read_json(args.metadata)
+    current = _read_json(args.manifest)
+    wanted = current.get("wanted") if current else None
+    changed = (
+        not metadata
+        or not isinstance(wanted, dict)
+        or metadata.get("source_fingerprint") != wanted.get("source_fingerprint")
+    )
+    if args.github_output:
+        with args.github_output.open("a", encoding="utf-8") as stream:
+            stream.write(f"changed={'true' if changed else 'false'}\n")
+    else:
+        print("true" if changed else "false")
+    return 0
+
+
 def command_build(args: argparse.Namespace) -> int:
+    metadata: dict[str, Any] | None
     if args.input:
         metadata = local_metadata(args.input)
     elif args.metadata:
@@ -662,8 +875,38 @@ def command_build(args: argparse.Namespace) -> int:
             raise SystemExit("Metadata file is missing or invalid")
     else:
         metadata = load_dataset_metadata(args.dataset_id, args.from_year, args.to_year)
+    if metadata is None:
+        raise SystemExit("Metadata file is missing or invalid")
     manifest = build_index(metadata, args.output, args.repository, args.prefix_length, args.max_events)
     print(json.dumps({"version": manifest["version"], "counts": manifest["counts"]}, ensure_ascii=False))
+    return 0
+
+
+def command_build_wanted(args: argparse.Namespace) -> int:
+    metadata = _read_json(args.metadata) if args.metadata else load_wanted_metadata(args.dataset_id)
+    if metadata is None:
+        raise SystemExit("Wanted metadata file is missing or invalid")
+    manifest = build_wanted_index(metadata, args.output, args.repository, args.prefix_length)
+    print(json.dumps({"version": manifest["version"], "counts": manifest["counts"]}, ensure_ascii=False))
+    return 0
+
+
+def command_compose_manifest(args: argparse.Namespace) -> int:
+    vehicle = _read_json(args.vehicle)
+    if vehicle is None:
+        raise SystemExit("Vehicle manifest is missing or invalid")
+    wanted = _read_json(args.wanted) if args.wanted else None
+    if wanted is None and args.current:
+        current = _read_json(args.current)
+        current_wanted = current.get("wanted") if current else None
+        wanted = current_wanted if isinstance(current_wanted, dict) else None
+    if wanted is not None:
+        vehicle["wanted"] = wanted
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(
+        json.dumps(vehicle, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     return 0
 
 
@@ -678,11 +921,22 @@ def make_parser() -> argparse.ArgumentParser:
     metadata.add_argument("--output", type=Path, required=True)
     metadata.set_defaults(func=command_metadata)
 
+    wanted_metadata = sub.add_parser("wanted-metadata", help="Fetch wanted-vehicle CKAN metadata")
+    wanted_metadata.add_argument("--dataset-id", default=WANTED_DATASET_ID)
+    wanted_metadata.add_argument("--output", type=Path, required=True)
+    wanted_metadata.set_defaults(func=command_wanted_metadata)
+
     changed = sub.add_parser("changed", help="Compare source metadata with the current manifest")
     changed.add_argument("--metadata", type=Path, required=True)
     changed.add_argument("--manifest", type=Path, required=True)
     changed.add_argument("--github-output", type=Path)
     changed.set_defaults(func=command_changed)
+
+    wanted_changed = sub.add_parser("wanted-changed", help="Compare wanted source with current manifest")
+    wanted_changed.add_argument("--metadata", type=Path, required=True)
+    wanted_changed.add_argument("--manifest", type=Path, required=True)
+    wanted_changed.add_argument("--github-output", type=Path)
+    wanted_changed.set_defaults(func=command_wanted_changed)
 
     build = sub.add_parser("build", help="Download resources and build release assets")
     build.add_argument("--metadata", type=Path)
@@ -695,6 +949,21 @@ def make_parser() -> argparse.ArgumentParser:
     build.add_argument("--prefix-length", type=int, default=DEFAULT_PREFIX_LENGTH)
     build.add_argument("--max-events", type=int, default=DEFAULT_MAX_EVENTS)
     build.set_defaults(func=command_build)
+
+    wanted_build = sub.add_parser("build-wanted", help="Build the wanted-vehicle search index")
+    wanted_build.add_argument("--metadata", type=Path)
+    wanted_build.add_argument("--dataset-id", default=WANTED_DATASET_ID)
+    wanted_build.add_argument("--output", type=Path, required=True)
+    wanted_build.add_argument("--repository", default=os.getenv("GITHUB_REPOSITORY", "owner/repository"))
+    wanted_build.add_argument("--prefix-length", type=int, default=DEFAULT_PREFIX_LENGTH)
+    wanted_build.set_defaults(func=command_build_wanted)
+
+    compose = sub.add_parser("compose-manifest", help="Attach wanted metadata to a vehicle manifest")
+    compose.add_argument("--vehicle", type=Path, required=True)
+    compose.add_argument("--current", type=Path)
+    compose.add_argument("--wanted", type=Path)
+    compose.add_argument("--output", type=Path, required=True)
+    compose.set_defaults(func=command_compose_manifest)
     return parser
 
 

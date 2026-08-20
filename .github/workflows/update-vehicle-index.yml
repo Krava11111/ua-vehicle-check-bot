@@ -9,7 +9,7 @@ on:
         default: false
         type: boolean
   schedule:
-    - cron: "23 3 * * *"
+    - cron: "23 */6 * * *"
 
 permissions:
   contents: write
@@ -37,16 +37,29 @@ jobs:
           mkdir -p .index-work/current
           python tools/build_release_index.py metadata \
             --from-year 2013 \
-            --output .index-work/source.json
+            --output .index-work/vehicles-source.json
+          python tools/build_release_index.py wanted-metadata \
+            --output .index-work/wanted-source.json
           gh release download vehicle-data-current \
             --pattern manifest.json \
             --dir .index-work/current || true
 
-      - name: Check whether the source changed
-        id: check
+      - name: Check whether vehicle registrations changed
+        id: vehicle_check
         run: |
           python tools/build_release_index.py changed \
-            --metadata .index-work/source.json \
+            --metadata .index-work/vehicles-source.json \
+            --manifest .index-work/current/manifest.json \
+            --github-output "$GITHUB_OUTPUT"
+          if [ "${{ inputs.force || false }}" = "true" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check whether wanted vehicles changed
+        id: wanted_check
+        run: |
+          python tools/build_release_index.py wanted-changed \
+            --metadata .index-work/wanted-source.json \
             --manifest .index-work/current/manifest.json \
             --github-output "$GITHUB_OUTPUT"
           if [ "${{ inputs.force || false }}" = "true" ]; then
@@ -54,17 +67,26 @@ jobs:
           fi
 
       - name: Build sharded index
-        if: steps.check.outputs.changed == 'true'
+        if: steps.vehicle_check.outputs.changed == 'true'
         run: |
           python tools/build_release_index.py build \
-            --metadata .index-work/source.json \
+            --metadata .index-work/vehicles-source.json \
             --repository "$GITHUB_REPOSITORY" \
             --prefix-length 3 \
             --max-events 50 \
             --output release-index
 
+      - name: Build wanted-vehicle index
+        if: steps.wanted_check.outputs.changed == 'true'
+        run: |
+          python tools/build_release_index.py build-wanted \
+            --metadata .index-work/wanted-source.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --prefix-length 3 \
+            --output wanted-index
+
       - name: Publish immutable archive releases
-        if: steps.check.outputs.changed == 'true'
+        if: steps.vehicle_check.outputs.changed == 'true'
         shell: bash
         run: |
           version="$(python -c 'import json; print(json.load(open("release-index/manifest.json", encoding="utf-8"))["version"])')"
@@ -82,8 +104,40 @@ jobs:
             gh release upload "$tag" "$archive" --clobber
           done
 
+      - name: Publish immutable wanted-vehicle releases
+        if: steps.wanted_check.outputs.changed == 'true'
+        shell: bash
+        run: |
+          version="$(python -c 'import json; print(json.load(open("wanted-index/manifest.json", encoding="utf-8"))["version"])')"
+          tag="wanted-data-${version}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --title "Wanted vehicle index ${version}" \
+              --notes "Generated automatically from the official National Police wanted-vehicle dataset." \
+              --latest=false
+          fi
+          gh release upload "$tag" wanted-index/archives/wanted-index-*.zip --clobber
+
+      - name: Compose current manifest
+        if: steps.vehicle_check.outputs.changed == 'true' || steps.wanted_check.outputs.changed == 'true'
+        shell: bash
+        run: |
+          vehicle_manifest=.index-work/current/manifest.json
+          if [ "${{ steps.vehicle_check.outputs.changed }}" = "true" ]; then
+            vehicle_manifest=release-index/manifest.json
+          fi
+          wanted_args=()
+          if [ "${{ steps.wanted_check.outputs.changed }}" = "true" ]; then
+            wanted_args=(--wanted wanted-index/manifest.json)
+          fi
+          python tools/build_release_index.py compose-manifest \
+            --vehicle "$vehicle_manifest" \
+            --current .index-work/current/manifest.json \
+            "${wanted_args[@]}" \
+            --output release-index/publish/manifest.json
+
       - name: Publish current manifest last
-        if: steps.check.outputs.changed == 'true'
+        if: steps.vehicle_check.outputs.changed == 'true' || steps.wanted_check.outputs.changed == 'true'
         run: |
           if ! gh release view vehicle-data-current >/dev/null 2>&1; then
             gh release create vehicle-data-current \
@@ -91,9 +145,9 @@ jobs:
               --notes "Stable manifest for the Telegram Cloudflare Worker." \
               --latest=false
           fi
-          gh release upload vehicle-data-current release-index/manifest.json --clobber
+          gh release upload vehicle-data-current release-index/publish/manifest.json --clobber
 
       - name: Summary
-        if: steps.check.outputs.changed == 'true'
+        if: steps.vehicle_check.outputs.changed == 'true' || steps.wanted_check.outputs.changed == 'true'
         run: |
-          python -c 'import json; m=json.load(open("release-index/manifest.json", encoding="utf-8")); print("### Vehicle index " + m["version"]); print(); print("```json"); print(json.dumps(m["counts"], indent=2)); print("```")' >> "$GITHUB_STEP_SUMMARY"
+          python -c 'import json; m=json.load(open("release-index/publish/manifest.json", encoding="utf-8")); print("### Vehicle index " + m["version"]); print(); print("```json"); print(json.dumps({"vehicles": m["counts"], "wanted": m.get("wanted", {}).get("counts")}, indent=2)); print("```")' >> "$GITHUB_STEP_SUMMARY"

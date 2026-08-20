@@ -51,7 +51,22 @@ export interface IndexManifest {
     vehicles: number;
     plates: number;
     events: number;
+    [key: string]: number;
   };
+  wanted?: WantedIndexManifest;
+}
+
+export interface WantedIndexManifest {
+  schema_version: number;
+  version: string;
+  generated_at: string;
+  dataset_updated_at?: string | null;
+  source_fingerprint: string;
+  source_label: string;
+  source_url: string;
+  shard_prefix_length: number;
+  archive_url_template: string;
+  counts: Record<string, number>;
 }
 
 export type CompactEvent = [
@@ -61,7 +76,35 @@ export type CompactEvent = [
   string | null,
   string | null,
   string | null,
+  (string | null)?,
+  (string | null)?,
+  (number | null)?,
+  (string | null)?,
+  (string | null)?,
+  (number | null)?,
+  (number | null)?,
+  (string | null)?,
 ];
+
+export type WantedRecord = [
+  string | null,
+  string | null,
+  string | null,
+  string | null,
+  string | null,
+  string | null,
+  string | null,
+  string | null,
+  string | null,
+  string | null,
+];
+
+export interface WantedCheck {
+  status: "match" | "clear" | "unavailable";
+  checkedAt: string | null;
+  sourceUrl: string | null;
+  matches: WantedRecord[];
+}
 
 export interface CompactVehicle {
   v: string | null;

@@ -1,4 +1,11 @@
-import type { CompactVehicle, IndexManifest, VehicleMatch } from "./types.js";
+import type {
+  CompactVehicle,
+  IndexManifest,
+  VehicleMatch,
+  WantedCheck,
+  WantedIndexManifest,
+  WantedRecord,
+} from "./types.js";
 
 const MANIFEST_TTL_MS = 5 * 60 * 1000;
 const ZIP_DIRECTORY_TTL_MS = 10 * 60 * 1000;
@@ -38,9 +45,14 @@ export async function loadManifest(url: string, fetcher: typeof fetch = fetch): 
   });
   if (!response.ok) throw new Error(`Manifest request failed: ${response.status}`);
   const manifest = (await response.json()) as IndexManifest;
-  if (manifest.schema_version !== 2 || !manifest.archive_url_template || manifest.shard_prefix_length < 1) {
+  if (![2, 3].includes(manifest.schema_version) || !manifest.archive_url_template || manifest.shard_prefix_length < 1) {
     throw new Error("Unsupported vehicle index manifest");
   }
+  if (manifest.wanted && (
+    manifest.wanted.schema_version !== 1
+    || !manifest.wanted.archive_url_template
+    || manifest.wanted.shard_prefix_length < 1
+  )) throw new Error("Unsupported wanted-vehicle index manifest");
   cachedManifest = { url, expiresAt: now + MANIFEST_TTL_MS, value: manifest };
   return manifest;
 }
@@ -53,6 +65,12 @@ export function archiveUrl(manifest: IndexManifest, shard: string): string {
 
 export function memberName(kind: "plates" | "vehicles", shard: string): string {
   return `${kind}-${shard}.json.gz`;
+}
+
+export function wantedArchiveUrl(manifest: WantedIndexManifest, shard: string): string {
+  return manifest.archive_url_template
+    .replace("{version}", encodeURIComponent(manifest.version))
+    .replaceAll("{group}", shard[0] ?? "0");
 }
 
 async function fetchRange(
@@ -232,6 +250,57 @@ export async function findVehicles(
     const key = limited[index];
     return vehicle && key ? [{ key, vehicle, matchedBy: kind, candidates: keys.length }] : [];
   });
+}
+
+async function loadWantedIdentifier(
+  identifier: string,
+  manifest: WantedIndexManifest,
+  fetcher: typeof fetch,
+): Promise<WantedRecord[]> {
+  const shard = await sha256Prefix(identifier, manifest.shard_prefix_length);
+  const compressed = await loadStoredZipMember(
+    wantedArchiveUrl(manifest, shard),
+    `wanted-${shard}.json.gz`,
+    fetcher,
+  );
+  if (!compressed) return [];
+  const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream("gzip"));
+  const identifiers = JSON.parse(await new Response(stream).text()) as Record<string, WantedRecord[]>;
+  return identifiers[identifier] ?? [];
+}
+
+export async function checkWanted(
+  identifiers: Array<string | null>,
+  manifest: IndexManifest,
+  fetcher: typeof fetch = fetch,
+): Promise<WantedCheck> {
+  const wanted = manifest.wanted;
+  if (!wanted) return { status: "unavailable", checkedAt: null, sourceUrl: null, matches: [] };
+  const uniqueIdentifiers = [...new Set(identifiers.filter((value): value is string => Boolean(value)))];
+  try {
+    const results = await Promise.all(
+      uniqueIdentifiers.map((identifier) => loadWantedIdentifier(identifier, wanted, fetcher)),
+    );
+    const matches = new Map<string, WantedRecord>();
+    for (const record of results.flat()) {
+      matches.set(record[0] ?? JSON.stringify(record), record);
+    }
+    const records = [...matches.values()];
+    return {
+      status: records.length ? "match" : "clear",
+      checkedAt: wanted.dataset_updated_at ?? wanted.generated_at,
+      sourceUrl: wanted.source_url,
+      matches: records,
+    };
+  } catch (error) {
+    console.error("wanted_lookup_failed", error instanceof Error ? error.message : String(error));
+    return {
+      status: "unavailable",
+      checkedAt: wanted.dataset_updated_at ?? null,
+      sourceUrl: wanted.source_url,
+      matches: [],
+    };
+  }
 }
 
 export function clearCachesForTests(): void {

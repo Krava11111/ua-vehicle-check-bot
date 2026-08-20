@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { clearCachesForTests, findVehicles, sha256Prefix } from "../src/index-client.js";
-import type { CompactVehicle, IndexManifest } from "../src/types.js";
+import { checkWanted, clearCachesForTests, findVehicles, sha256Prefix } from "../src/index-client.js";
+import type { CompactVehicle, IndexManifest, WantedRecord } from "../src/types.js";
 
 function storedZip(name: string, payload: Uint8Array): Uint8Array {
   const encodedName = new TextEncoder().encode(name);
@@ -79,4 +79,59 @@ test("range-reads and decompresses one vehicle ZIP member", async () => {
   const matches = await findVehicles("VIN", vin, manifest, 3, fetcher);
   assert.equal(matches.length, 1);
   assert.equal(matches[0]?.vehicle.p, "KA3333CC");
+});
+
+test("range-reads wanted records by VIN", async () => {
+  clearCachesForTests();
+  const vin = "WVWZZZ3CZHE123456";
+  const shard = await sha256Prefix(vin, 3);
+  const record: WantedRecord = [
+    "wanted-1", "KA3333CC", vin, null, "VOLKSWAGEN", "PASSAT", "ЧОРНИЙ",
+    "2026-08-18", "2026-08-18", "Легковий автотранспорт",
+  ];
+  const gzipStream = new Blob([JSON.stringify({ [vin]: [record] })])
+    .stream()
+    .pipeThrough(new CompressionStream("gzip"));
+  const gzip = new Uint8Array(await new Response(gzipStream).arrayBuffer());
+  const zip = storedZip(`wanted-${shard}.json.gz`, gzip);
+  const fetcher: typeof fetch = async (_input, init) => {
+    const range = new Headers(init?.headers).get("range") ?? "";
+    const match = /^bytes=(\d+)-(\d+)$/.exec(range);
+    if (!match) return new Response("range required", { status: 400 });
+    const start = Number(match[1]);
+    const end = Math.min(Number(match[2]), zip.length - 1);
+    return new Response(zip.slice(start, end + 1), {
+      status: 206,
+      headers: { "Content-Range": `bytes ${start}-${end}/${zip.length}` },
+    });
+  };
+  const manifest: IndexManifest = {
+    schema_version: 3,
+    version: "fixture",
+    generated_at: "2026-08-20T00:00:00Z",
+    source_fingerprint: "fixture",
+    source_label: "fixture",
+    source_url: "https://example.com",
+    repository: "owner/repo",
+    shard_prefix_length: 3,
+    max_events_per_vehicle: 50,
+    archive_url_template: "https://example.com/index-{group}.zip",
+    counts: { vehicles: 1, plates: 1, events: 0 },
+    wanted: {
+      schema_version: 1,
+      version: "wanted-fixture",
+      generated_at: "2026-08-20T00:00:00Z",
+      dataset_updated_at: "2026-08-20T07:15:11Z",
+      source_fingerprint: "wanted",
+      source_label: "police",
+      source_url: "https://data.gov.ua/wanted",
+      shard_prefix_length: 3,
+      archive_url_template: "https://example.com/wanted-{group}.zip",
+      counts: { identifiers: 1 },
+    },
+  };
+
+  const result = await checkWanted([vin], manifest, fetcher);
+  assert.equal(result.status, "match");
+  assert.equal(result.matches[0]?.[0], "wanted-1");
 });

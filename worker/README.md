@@ -6,16 +6,19 @@ using HTTP Range. The full MVS dataset and even the full ZIP are never stored on
 
 ## Data flow
 
-1. `.github/workflows/update-vehicle-index.yml` checks CKAN metadata every day.
-2. When the official resource changes, `tools/build_release_index.py` downloads resources
-   on the temporary GitHub runner and creates 4096 small gzip shards.
-3. The shards are packed into 16 uncompressed-container ZIP files and published to 16
-   immutable releases. The stable `vehicle-data-current` manifest is updated last.
+1. `.github/workflows/update-vehicle-index.yml` checks registration and National Police
+   wanted-vehicle CKAN metadata every six hours.
+2. When the registration resource changes, `tools/build_release_index.py` downloads it on the
+   temporary GitHub runner and creates 4096 small gzip shards. The much smaller wanted index is
+   rebuilt independently, so a daily police update does not rebuild the multi-year history.
+3. Both indexes are packed into 16 uncompressed-container ZIP files and published to immutable
+   releases. The stable `vehicle-data-current` manifest is updated only after all assets exist.
 4. The Worker hashes the plate or VIN, range-reads the ZIP directory and only the matching
    plate/vehicle members, then decompresses those small members in memory.
 
-The official source is monthly, so checking daily provides the newest published data but
-cannot make the source itself real-time.
+The official registration source is approximately monthly. The National Police wanted-vehicle
+source is published separately and normally changes daily. The report identifies its checked
+version and says only that a match was or was not found in that open dataset.
 
 ## Cloudflare deployment
 
@@ -87,6 +90,15 @@ python ..\tools\build_release_index.py build \
   --output ..\release-index
 ```
 
+Build the wanted-vehicle fixture:
+
+```powershell
+python ..\tools\build_release_index.py build-wanted \
+  --metadata wanted-source.json \
+  --repository owner/repository \
+  --output ..\wanted-index
+```
+
 ## Operational notes
 
 - The in-memory rate limiter is best-effort because Worker isolates do not share memory.
@@ -98,6 +110,13 @@ python ..\tools\build_release_index.py build \
   exceeds the Worker's 12 MB safety limit. In that case increase `--prefix-length` and publish a
   new manifest schema/layout.
 - The worker shows source attribution required by the dataset licence.
+- Every report contains a separate wanted-registry result, VIN/WMI analysis, import indicators,
+  estimated ownership changes, plate/region history, historical characteristic changes and
+  rapid-resale heuristics. These are explicitly marked as open-data matches or the service's own
+  analytics, never as a legal conclusion. A wanted-index failure is displayed as unavailable,
+  not converted to "no matches".
+- The report does not claim a vehicle-specific ДТП result. Published police crash statistics do
+  not provide a reliable public VIN/plate-to-crash mapping.
 - Every vehicle report offers buttons to copy its current plate/VIN and opens the official
   MTSBU policy-check service. MTSBU does not prefill the form from documented URL parameters,
   protects the interactive search with Turnstile and does not publish a server API for this

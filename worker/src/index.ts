@@ -1,5 +1,6 @@
+import { renderVehicleAnalytics, renderWantedCheck } from "./analytics.js";
 import { renderVehicle } from "./format.js";
-import { findVehicles, loadManifest } from "./index-client.js";
+import { checkWanted, findVehicles, loadManifest } from "./index-client.js";
 import { detectQuery, languageFor } from "./normalization.js";
 import { insuranceKeyboard, mainKeyboard, telegramCall, vehicleReportKeyboard } from "./telegram.js";
 import type { Env, ExecutionContextLike, Language, TelegramMessage, TelegramUpdate } from "./types.js";
@@ -17,7 +18,7 @@ function textFor(language: Language, key: string): string {
       rate: "⚠️ Забагато запитів. Спробуйте через хвилину.",
       unavailable: "⚠️ Джерело даних тимчасово недоступне. Спробуйте пізніше.",
       insurance: "🛡 <b>Перевірка чинності поліса ОСЦПВ</b>\n\nАктуальний результат на обрану дату надає офіційний сервіс МТСБУ. Відкрийте його кнопкою нижче та введіть державний номер або VIN.\n\nℹ️ МТСБУ захищає форму перевірки Turnstile, тому бот не обходить перевірку і не видає технічну помилку за відсутність поліса.",
-      about: "ℹ️ Бот шукає в автоматично оновлюваному індексі офіційних відкритих даних МВС України. Набір оновлюється розпорядником приблизно раз на місяць. Чинність страхування перевіряється в офіційному сервісі МТСБУ.",
+      about: "ℹ️ Бот шукає в автоматично оновлюваних офіційних відкритих даних МВС і Національної поліції України. Звіт містить перевірку відкритого реєстру розшуку, VIN-аналіз та власні аналітичні оцінки з поясненням обмежень. Чинність страхування перевіряється в офіційному сервісі МТСБУ.",
     },
     ru: {
       welcome: "🚘 <b>Проверка автомобиля</b>\n\nОтправьте государственный номер или VIN-код либо воспользуйтесь проверкой страховки.",
@@ -28,7 +29,7 @@ function textFor(language: Language, key: string): string {
       rate: "⚠️ Слишком много запросов. Попробуйте через минуту.",
       unavailable: "⚠️ Источник данных временно недоступен. Попробуйте позднее.",
       insurance: "🛡 <b>Проверка действительности полиса ОСАГО</b>\n\nАктуальный результат на выбранную дату предоставляет официальный сервис МТСБУ. Откройте его кнопкой ниже и введите государственный номер или VIN.\n\nℹ️ МТСБУ защищает форму Turnstile, поэтому бот не обходит проверку и не выдаёт техническую ошибку за отсутствие полиса.",
-      about: "ℹ️ Бот ищет в автоматически обновляемом индексе официальных открытых данных МВД Украины. Набор обновляется распорядителем приблизительно раз в месяц. Действительность страховки проверяется в официальном сервисе МТСБУ.",
+      about: "ℹ️ Бот ищет в автоматически обновляемых официальных открытых данных МВД и Национальной полиции Украины. Отчёт содержит проверку открытого реестра розыска, VIN-анализ и собственные аналитические оценки с объяснением ограничений. Действительность страховки проверяется в официальном сервисе МТСБУ.",
     },
   } as const;
   return messages[language][key as keyof (typeof messages)["uk"]];
@@ -123,12 +124,31 @@ async function handleMessage(message: TelegramMessage, env: Env): Promise<void> 
     );
     if (!matches.length) {
       await send(textFor(language, "notFound"), true);
+      const wanted = await checkWanted([query.normalized], manifest);
+      await telegramCall(env.BOT_TOKEN, "sendMessage", {
+        chat_id: message.chat.id,
+        text: renderWantedCheck(wanted, language),
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+        reply_markup: vehicleReportKeyboard(
+          language,
+          query.kind === "PLATE" ? query.normalized : null,
+          query.kind === "VIN" ? query.normalized : null,
+        ),
+      });
       return;
     }
     for (const match of matches) {
       await telegramCall(env.BOT_TOKEN, "sendMessage", {
         chat_id: message.chat.id,
         text: renderVehicle(match, manifest, language),
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+      });
+      const wanted = await checkWanted([match.vehicle.p, match.vehicle.v], manifest);
+      await telegramCall(env.BOT_TOKEN, "sendMessage", {
+        chat_id: message.chat.id,
+        text: renderVehicleAnalytics(match, wanted, language),
         parse_mode: "HTML",
         disable_web_page_preview: true,
         reply_markup: vehicleReportKeyboard(language, match.vehicle.p, match.vehicle.v),
@@ -145,7 +165,13 @@ async function handleRequest(request: Request, env: Env, context: ExecutionConte
   if (request.method === "GET" && url.pathname === "/health") {
     try {
       const manifest = await loadManifest(env.INDEX_MANIFEST_URL);
-      return Response.json({ ok: true, indexVersion: manifest.version, generatedAt: manifest.generated_at });
+      return Response.json({
+        ok: true,
+        indexVersion: manifest.version,
+        generatedAt: manifest.generated_at,
+        wantedVersion: manifest.wanted?.version ?? null,
+        wantedUpdatedAt: manifest.wanted?.dataset_updated_at ?? null,
+      });
     } catch {
       return Response.json({ ok: false, error: "index_unavailable" }, { status: 503 });
     }
