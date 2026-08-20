@@ -8,8 +8,18 @@ INDEX_MANIFEST_URL = "https://github.com/Krava11111/ua-vehicle-check-bot/release
 DEFAULT_LANGUAGE = "uk"
 RATE_LIMIT_PER_MINUTE = "10"
 MAX_CANDIDATES = "3"
+HISTORY_CACHE_TTL = "21600"
+ODOMETER_ROLLBACK_TOLERANCE_KM = "1000"
+HISTORY_SCORE_ENABLED = "true"
+
+[[d1_databases]]
+binding = "HISTORY_DB"
+database_name = "ua-vehicle-history"
+database_id = "d53e5f09-5f12-43c6-a65f-503a4b2a285b"
+migrations_dir = "migrations"
 
 # Add secrets with:
 #   npx wrangler secret put BOT_TOKEN
 #   npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 #   npx wrangler secret put WEBHOOK_SECRET_PATH
+#   npx wrangler secret put HISTORY_IMPORT_SECRET

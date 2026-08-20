@@ -1,9 +1,19 @@
 import { renderVehicleAnalytics, renderWantedCheck } from "./analytics.js";
 import { renderVehicle } from "./format.js";
+import { renderExternalHistory } from "./history-format.js";
+import { ExternalHistoryService, importHistory } from "./history.js";
 import { checkWanted, findVehicles, loadManifest } from "./index-client.js";
 import { detectQuery, languageFor } from "./normalization.js";
 import { insuranceKeyboard, mainKeyboard, telegramCall, vehicleReportKeyboard } from "./telegram.js";
-import type { Env, ExecutionContextLike, Language, TelegramMessage, TelegramUpdate } from "./types.js";
+import type {
+  Env,
+  ExecutionContextLike,
+  HistoryImportPayload,
+  Language,
+  TelegramCallbackQuery,
+  TelegramMessage,
+  TelegramUpdate,
+} from "./types.js";
 
 const MEMORY_LIMITS = new Map<string, { minute: number; count: number }>();
 
@@ -160,8 +170,94 @@ async function handleMessage(message: TelegramMessage, env: Env): Promise<void> 
   }
 }
 
+async function handleCallback(callback: TelegramCallbackQuery, env: Env): Promise<void> {
+  await telegramCall(env.BOT_TOKEN, "answerCallbackQuery", {
+    callback_query_id: callback.id,
+  });
+  const data = callback.data ?? "";
+  const chatId = callback.message?.chat.id;
+  if (!chatId || !data.startsWith("full:")) return;
+  const vin = data.slice(5).toUpperCase();
+  const language = languageFor(callback.from.language_code, env.DEFAULT_LANGUAGE);
+  try {
+    const manifest = await loadManifest(env.INDEX_MANIFEST_URL);
+    const matches = await findVehicles("VIN", vin, manifest, 1);
+    const match = matches[0];
+    if (!match) {
+      await answer(env, chatId, textFor(language, "notFound"));
+      return;
+    }
+    const wanted = await checkWanted([match.vehicle.p, match.vehicle.v], manifest);
+    await telegramCall(env.BOT_TOKEN, "sendMessage", {
+      chat_id: chatId,
+      text: renderVehicle(match, manifest, language),
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+    });
+    await telegramCall(env.BOT_TOKEN, "sendMessage", {
+      chat_id: chatId,
+      text: renderVehicleAnalytics(match, wanted, language),
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+    });
+    const history = await new ExternalHistoryService().getByVin(vin, match, env);
+    const parts = renderExternalHistory(history, match, language);
+    for (const [index, part] of parts.entries()) {
+      await telegramCall(env.BOT_TOKEN, "sendMessage", {
+        chat_id: chatId,
+        text: part,
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+        ...(index === parts.length - 1
+          ? { reply_markup: vehicleReportKeyboard(language, match.vehicle.p, match.vehicle.v) }
+          : {}),
+      });
+    }
+  } catch (error) {
+    console.error("full_report_failed", error instanceof Error ? error.message : String(error));
+    await answer(env, chatId, textFor(language, "unavailable"));
+  }
+}
+
+function adminAuthorized(request: Request, env: Env): boolean {
+  if (!env.HISTORY_IMPORT_SECRET) return false;
+  return request.headers.get("Authorization") === `Bearer ${env.HISTORY_IMPORT_SECRET}`;
+}
+
+async function registerTelegramWebhook(request: Request, env: Env): Promise<Response> {
+  if (!adminAuthorized(request, env)) return new Response("Forbidden", { status: 403 });
+  const origin = new URL(request.url).origin;
+  const webhookPath = env.WEBHOOK_SECRET_PATH.replace(/^\/+|\/+$/g, "");
+  await telegramCall(env.BOT_TOKEN, "setWebhook", {
+    url: `${origin}/${webhookPath}`,
+    secret_token: env.TELEGRAM_WEBHOOK_SECRET,
+    allowed_updates: ["message", "callback_query"],
+    drop_pending_updates: false,
+  });
+  return Response.json({ ok: true, webhook: `${origin}/***`, allowedUpdates: ["message", "callback_query"] });
+}
+
+async function importHistoryRequest(request: Request, env: Env): Promise<Response> {
+  if (!adminAuthorized(request, env)) return new Response("Forbidden", { status: 403 });
+  const length = Number(request.headers.get("Content-Length") ?? "0");
+  if (length > 1_000_000) return new Response("Payload too large", { status: 413 });
+  try {
+    const payload = (await request.json()) as HistoryImportPayload;
+    return Response.json({ ok: true, ...(await importHistory(payload, env)) });
+  } catch (error) {
+    console.error("history_import_failed", error instanceof Error ? error.message : String(error));
+    return Response.json({ ok: false, error: error instanceof Error ? error.message : "invalid_import" }, { status: 400 });
+  }
+}
+
 async function handleRequest(request: Request, env: Env, context: ExecutionContextLike): Promise<Response> {
   const url = new URL(request.url);
+  if (request.method === "POST" && url.pathname === "/admin/history/import") {
+    return importHistoryRequest(request, env);
+  }
+  if (request.method === "POST" && url.pathname === "/admin/register-webhook") {
+    return registerTelegramWebhook(request, env);
+  }
   if (request.method === "GET" && url.pathname === "/health") {
     try {
       const manifest = await loadManifest(env.INDEX_MANIFEST_URL);
@@ -171,6 +267,7 @@ async function handleRequest(request: Request, env: Env, context: ExecutionConte
         generatedAt: manifest.generated_at,
         wantedVersion: manifest.wanted?.version ?? null,
         wantedUpdatedAt: manifest.wanted?.dataset_updated_at ?? null,
+        historyStorage: env.HISTORY_DB ? "d1" : "unavailable",
       });
     } catch {
       return Response.json({ ok: false, error: "index_unavailable" }, { status: 503 });
@@ -187,6 +284,7 @@ async function handleRequest(request: Request, env: Env, context: ExecutionConte
     return new Response("Bad request", { status: 400 });
   }
   if (update.message?.text) context.waitUntil(handleMessage(update.message, env));
+  else if (update.callback_query?.data) context.waitUntil(handleCallback(update.callback_query, env));
   return new Response("OK");
 }
 

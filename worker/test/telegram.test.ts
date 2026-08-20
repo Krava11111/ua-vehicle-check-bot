@@ -17,6 +17,7 @@ test("vehicle report lets the user copy plate and VIN before opening MTSBU", () 
   assert.match(keyboard, /Скопировать номер AA1234BB/);
   assert.match(keyboard, /"copy_text":\{"text":"AA1234BB"\}/);
   assert.match(keyboard, /"copy_text":\{"text":"WVWZZZ3CZHE123456"\}/);
+  assert.match(keyboard, /"callback_data":"full:WVWZZZ3CZHE123456"/);
   assert.match(keyboard, /https:\/\/policy\.mtsbu\.ua\/Search\/Main\//);
 });
 

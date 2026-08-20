@@ -51,6 +51,10 @@ export function vehicleReportKeyboard(
   }
   if (vin) {
     rows.push([{
+      text: language === "ru" ? "📊 Полный отчёт" : "📊 Повний звіт",
+      callback_data: `full:${vin}`,
+    }]);
+    rows.push([{
       text: language === "ru" ? "📋 Скопировать VIN" : "📋 Скопіювати VIN",
       copy_text: { text: vin },
     }]);
