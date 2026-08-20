@@ -1,7 +1,7 @@
 import { renderVehicle } from "./format.js";
 import { findVehicles, loadManifest } from "./index-client.js";
 import { detectQuery, languageFor } from "./normalization.js";
-import { mainKeyboard, telegramCall } from "./telegram.js";
+import { insuranceKeyboard, mainKeyboard, telegramCall } from "./telegram.js";
 import type { Env, ExecutionContextLike, Language, TelegramMessage, TelegramUpdate } from "./types.js";
 
 const MEMORY_LIMITS = new Map<string, { minute: number; count: number }>();
@@ -9,24 +9,26 @@ const MEMORY_LIMITS = new Map<string, { minute: number; count: number }>();
 function textFor(language: Language, key: string): string {
   const messages = {
     uk: {
-      welcome: "🚘 <b>Перевірка автомобіля</b>\n\nНадішліть державний номер або VIN-код.",
+      welcome: "🚘 <b>Перевірка автомобіля</b>\n\nНадішліть державний номер або VIN-код чи скористайтеся перевіркою страхування.",
       askPlate: "Надішліть державний номер, наприклад <code>AA1234BB</code>.",
       askVin: "Надішліть VIN-код із 17 символів, наприклад <code>WVWZZZ3CZHE123456</code>.",
       invalid: "❌ Не вдалося визначити номер або VIN.\n\nНомер: <code>AA1234BB</code>\nVIN: <code>WVWZZZ3CZHE123456</code>",
       notFound: "🔍 <b>Автомобіль не знайдено</b>\n\nПеревірте правильність номера або VIN. Відсутність у відкритому наборі не означає відсутність реєстрації.",
       rate: "⚠️ Забагато запитів. Спробуйте через хвилину.",
       unavailable: "⚠️ Джерело даних тимчасово недоступне. Спробуйте пізніше.",
-      about: "ℹ️ Бот шукає в автоматично оновлюваному індексі офіційних відкритих даних МВС України. Набір оновлюється розпорядником приблизно раз на місяць.",
+      insurance: "🛡 <b>Перевірка чинності поліса ОСЦПВ</b>\n\nАктуальний результат на обрану дату надає офіційний сервіс МТСБУ. Відкрийте його кнопкою нижче та введіть державний номер або VIN.\n\nℹ️ МТСБУ захищає форму перевірки Turnstile, тому бот не обходить перевірку і не видає технічну помилку за відсутність поліса.",
+      about: "ℹ️ Бот шукає в автоматично оновлюваному індексі офіційних відкритих даних МВС України. Набір оновлюється розпорядником приблизно раз на місяць. Чинність страхування перевіряється в офіційному сервісі МТСБУ.",
     },
     ru: {
-      welcome: "🚘 <b>Проверка автомобиля</b>\n\nОтправьте государственный номер или VIN-код.",
+      welcome: "🚘 <b>Проверка автомобиля</b>\n\nОтправьте государственный номер или VIN-код либо воспользуйтесь проверкой страховки.",
       askPlate: "Отправьте государственный номер, например <code>AA1234BB</code>.",
       askVin: "Отправьте VIN-код из 17 символов, например <code>WVWZZZ3CZHE123456</code>.",
       invalid: "❌ Не удалось определить номер или VIN.\n\nНомер: <code>AA1234BB</code>\nVIN: <code>WVWZZZ3CZHE123456</code>",
       notFound: "🔍 <b>Автомобиль не найден</b>\n\nПроверьте правильность номера или VIN. Отсутствие в открытом наборе не означает отсутствие регистрации.",
       rate: "⚠️ Слишком много запросов. Попробуйте через минуту.",
       unavailable: "⚠️ Источник данных временно недоступен. Попробуйте позднее.",
-      about: "ℹ️ Бот ищет в автоматически обновляемом индексе официальных открытых данных МВД Украины. Набор обновляется распорядителем приблизительно раз в месяц.",
+      insurance: "🛡 <b>Проверка действительности полиса ОСАГО</b>\n\nАктуальный результат на выбранную дату предоставляет официальный сервис МТСБУ. Откройте его кнопкой ниже и введите государственный номер или VIN.\n\nℹ️ МТСБУ защищает форму Turnstile, поэтому бот не обходит проверку и не выдаёт техническую ошибку за отсутствие полиса.",
+      about: "ℹ️ Бот ищет в автоматически обновляемом индексе официальных открытых данных МВД Украины. Набор обновляется распорядителем приблизительно раз в месяц. Действительность страховки проверяется в официальном сервисе МТСБУ.",
     },
   } as const;
   return messages[language][key as keyof (typeof messages)["uk"]];
@@ -81,6 +83,20 @@ async function handleMessage(message: TelegramMessage, env: Env): Promise<void> 
   }
   if (text.includes("Перевірити за VIN") || text.includes("Проверить по VIN")) {
     await send(textFor(language, "askVin"));
+    return;
+  }
+  if (
+    text.startsWith("/insurance")
+    || text.includes("Перевірити страховку")
+    || text.includes("Проверить страховку")
+  ) {
+    await telegramCall(env.BOT_TOKEN, "sendMessage", {
+      chat_id: message.chat.id,
+      text: textFor(language, "insurance"),
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+      reply_markup: insuranceKeyboard(language),
+    });
     return;
   }
   if (text.includes("Про сервіс") || text.includes("О сервисе")) {

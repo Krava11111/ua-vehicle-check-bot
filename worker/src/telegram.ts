@@ -21,8 +21,18 @@ export function mainKeyboard(language: Language): Record<string, unknown> {
     keyboard: [
       [language === "ru" ? "🚘 Проверить по номеру" : "🚘 Перевірити за номером"],
       [language === "ru" ? "🔢 Проверить по VIN" : "🔢 Перевірити за VIN"],
+      [language === "ru" ? "🛡 Проверить страховку" : "🛡 Перевірити страховку"],
       [language === "ru" ? "ℹ️ О сервисе" : "ℹ️ Про сервіс"],
     ],
     resize_keyboard: true,
+  };
+}
+
+export function insuranceKeyboard(language: Language): Record<string, unknown> {
+  return {
+    inline_keyboard: [[{
+      text: language === "ru" ? "🛡 Открыть проверку МТСБУ" : "🛡 Відкрити перевірку МТСБУ",
+      url: "https://policy.mtsbu.ua/Search/Main/",
+    }]],
   };
 }
