@@ -21,6 +21,30 @@ function unknown(language: Language): string {
   return language === "ru" ? "нет данных" : "немає даних";
 }
 
+function formatMoney(value: number | null, currency: string | null): string {
+  if (value === null) return "—";
+  return `${Math.round(value).toLocaleString("uk-UA")} ${escapeHtml(currency ?? "")}`.trim();
+}
+
+function formatMileage(value: number | null, unit: string | null, km: number | null): string {
+  if (value === null) return "—";
+  const original = `${Math.round(value).toLocaleString("uk-UA")} ${escapeHtml(unit ?? "")}`.trim();
+  return km !== null && !["km", "км"].includes((unit ?? "").toLowerCase())
+    ? `${original} ≈ ${km.toLocaleString("uk-UA")} км`
+    : original;
+}
+
+function externalStatus(
+  status: VehicleReportData["externalHistory"]["auctions"] | undefined,
+  count: number,
+  language: Language,
+): string {
+  if (status === "available") return language === "ru" ? `найдено ${count}` : `знайдено ${count}`;
+  if (status === "empty") return language === "ru" ? "совпадений нет" : "збігів немає";
+  if (status === "unavailable") return language === "ru" ? "временно недоступно" : "тимчасово недоступно";
+  return language === "ru" ? "API не настроен" : "API не налаштовано";
+}
+
 function title(data: VehicleReportData): string {
   const vehicle = data.match.vehicle;
   return [vehicle.b, vehicle.m].filter(Boolean).map(escapeHtml).join(" ") || "—";
@@ -190,6 +214,12 @@ export class ReportRenderer {
         : "⚪ Статус не вдалося перевірити автоматично. Доступна офіційна перевірка МТСБУ за кнопкою.",
       "\n━━━━━━━━━━━━━━",
       ...wantedBrief(data, language),
+      ...(data.externalHistory?.data?.auctions.length
+        ? [`🇺🇸 ${language === "ru" ? "Аукционных событий" : "Аукціонних подій"}: ${data.externalHistory.data.auctions.length}`]
+        : []),
+      ...(data.externalHistory?.data?.marketplace.length
+        ? [`🇺🇦 ${language === "ru" ? "Объявлений AUTO.RIA" : "Оголошень AUTO.RIA"}: ${data.externalHistory.data.marketplace.length}`]
+        : []),
       "\n━━━━━━━━━━━━━━",
       language === "ru"
         ? `ℹ️ История основана на доступных открытых данных примерно с ${data.source.historyStartYear} года.`
@@ -224,9 +254,9 @@ export class ReportRenderer {
         : data.wanted.status === "match"
           ? (language === "ru" ? `🚨 Розыск: найдено совпадений — ${data.wanted.matches.length}` : `🚨 Розшук: знайдено збігів — ${data.wanted.matches.length}`)
           : (language === "ru" ? "🚨 Розыск: проверка недоступна" : "🚨 Розшук: перевірка недоступна"),
-      `\n🇺🇸 ${language === "ru" ? "Аукционы: источник не подключён" : "Аукціони: джерело не підключене"}`,
-      `🇺🇦 ${language === "ru" ? "Объявления: источник не подключён" : "Оголошення: джерело не підключене"}`,
-      `📊 ${language === "ru" ? "Пробег: источник не подключён" : "Пробіг: джерело не підключене"}`,
+      `\n🇺🇸 ${language === "ru" ? "Аукционы" : "Аукціони"}: ${externalStatus(data.externalHistory?.auctions, data.externalHistory?.data?.auctions.length ?? 0, language)}`,
+      `🇺🇦 ${language === "ru" ? "Объявления" : "Оголошення"}: ${externalStatus(data.externalHistory?.marketplace, data.externalHistory?.data?.marketplace.length ?? 0, language)}`,
+      `📊 ${language === "ru" ? "Пробег" : "Пробіг"}: ${externalStatus(data.externalHistory?.odometer, data.externalHistory?.data?.mileage.length ?? 0, language)}`,
       language === "ru" ? "\nВыберите раздел:" : "\nОберіть розділ:",
     ];
     return lines.filter(Boolean).join("\n").slice(0, TELEGRAM_SAFE_LIMIT);
@@ -336,19 +366,47 @@ export class ReportRenderer {
       : "🛡 <b>ОСЦПВ</b>\n\n⚪ Статус не вдалося перевірити автоматично. Starcar не видає технічну недоступність за відсутність поліса. Скористайтеся офіційною формою МТСБУ за кнопкою."];
   }
 
-  static renderExternalSection(section: "auctions" | "marketplace" | "odometer", language: Language): string[] {
-    const values = {
-      auctions: language === "ru"
-        ? "🇺🇸 <b>АУКЦИОНЫ США</b>\n\n⚪ Разрешённый документированный источник не подключён. Отсутствие данных не означает, что автомобиль не участвовал в аукционе."
-        : "🇺🇸 <b>АУКЦІОНИ США</b>\n\n⚪ Дозволене документоване джерело не підключене. Відсутність даних не означає, що автомобіль не брав участі в аукціоні.",
-      marketplace: language === "ru"
-        ? "🇺🇦 <b>ИСТОРИЯ ПРОДАЖ</b>\n\n⚪ Официальный provider объявлений не подключён. Отсутствие данных не означает, что автомобиль никогда не продавался."
-        : "🇺🇦 <b>ІСТОРІЯ ПРОДАЖІВ</b>\n\n⚪ Офіційний provider оголошень не підключений. Відсутність даних не означає, що автомобіль ніколи не продавався.",
-      odometer: language === "ru"
-        ? "📊 <b>ИСТОРИЯ ПРОБЕГА</b>\n\n⚪ Подключённых записей пробега нет. Starcar не делает вывод о пробеге без источника."
-        : "📊 <b>ІСТОРІЯ ПРОБІГУ</b>\n\n⚪ Підключених записів пробігу немає. Starcar не робить висновок про пробіг без джерела.",
-    };
-    return [values[section]];
+  static renderExternalSection(data: VehicleReportData, section: "auctions" | "marketplace" | "odometer", language: Language): string[] {
+    const ru = language === "ru";
+    const history = data.externalHistory?.data;
+    const lines: string[] = [];
+    if (section === "auctions") {
+      lines.push(ru ? "🇺🇸 <b>АУКЦИОНЫ США</b>" : "🇺🇸 <b>АУКЦІОНИ США</b>");
+      if (data.externalHistory?.auctions === "not_connected") lines.push(ru ? "⚪ API аукционной истории ещё не настроен." : "⚪ API аукціонної історії ще не налаштовано.");
+      else if (data.externalHistory?.auctions === "unavailable") lines.push(ru ? "⚪ API аукционов временно недоступен." : "⚪ API аукціонів тимчасово недоступний.");
+      else if (!history?.auctions.length) lines.push(ru ? "В подключённом источнике совпадений нет. Это не доказывает отсутствие аукционной истории." : "У підключеному джерелі збігів немає. Це не доводить відсутність аукціонної історії.");
+      for (const [index, event] of (history?.auctions ?? []).slice(0, 10).entries()) {
+        lines.push("", `${index + 1}. <b>${escapeHtml(event.auctionName ?? event.provider)}</b>`);
+        if (event.auctionDate) lines.push(`${ru ? "Дата" : "Дата"}: ${formatDate(event.auctionDate)}`);
+        if (event.lotNumber) lines.push(`${ru ? "Лот" : "Лот"}: <code>${escapeHtml(event.lotNumber)}</code>`);
+        if (event.location) lines.push(`📍 ${escapeHtml(event.location)}`);
+        if (event.primaryDamage) lines.push(`💥 ${ru ? "Повреждение" : "Пошкодження"}: ${escapeHtml(event.primaryDamage)}`);
+        if (event.odometer !== null) lines.push(`📊 ${formatMileage(event.odometer, event.odometerUnit, event.normalizedOdometerKm)}`);
+        if (event.finalBid !== null) lines.push(`💵 ${ru ? "Финальная ставка" : "Фінальна ставка"}: ${formatMoney(event.finalBid, event.currency)}`);
+        if (event.photos[0]) lines.push(`📸 <a href="${escapeHtml(event.photos[0])}">${ru ? "Фото источника" : "Фото джерела"}</a>`);
+        if (event.sourceUrl) lines.push(`🔗 <a href="${escapeHtml(event.sourceUrl)}">${ru ? "Карточка лота" : "Картка лота"}</a>`);
+      }
+      if (data.match.vehicle.v) lines.push("", ru ? "🔎 Для дополнительной ручной проверки используйте кнопки Copart и BidFax." : "🔎 Для додаткової ручної перевірки скористайтеся кнопками Copart і BidFax.");
+    } else if (section === "marketplace") {
+      lines.push(ru ? "🇺🇦 <b>ИСТОРИЯ ОБЪЯВЛЕНИЙ AUTO.RIA</b>" : "🇺🇦 <b>ІСТОРІЯ ОГОЛОШЕНЬ AUTO.RIA</b>");
+      if (data.externalHistory?.marketplace === "not_connected") lines.push(ru ? "⚪ API AUTO.RIA ещё не настроен." : "⚪ API AUTO.RIA ще не налаштовано.");
+      else if (data.externalHistory?.marketplace === "unavailable") lines.push(ru ? "⚪ AUTO.RIA временно недоступен." : "⚪ AUTO.RIA тимчасово недоступний.");
+      else if (!history?.marketplace.length) lines.push(ru ? "В доступной истории объявлений совпадений нет. Это не означает, что авто никогда не продавалось." : "У доступній історії оголошень збігів немає. Це не означає, що авто ніколи не продавалося.");
+      for (const listing of (history?.marketplace ?? []).slice(0, 10)) {
+        const latest = listing.snapshots.at(-1);
+        const listingTitle = listing.title ?? (`${listing.brand ?? ""} ${listing.model ?? ""}`.trim() || listing.provider);
+        lines.push("", `<b>${escapeHtml(listingTitle)}</b>`, `${ru ? "Первое обнаружение" : "Перше виявлення"}: ${formatDate(listing.firstSeenAt)}`, `${ru ? "Последнее" : "Останнє"}: ${formatDate(listing.lastSeenAt)}`);
+        if (latest?.price !== null && latest?.price !== undefined) lines.push(`💰 ${formatMoney(latest.price, latest.currency)}`);
+        if (latest?.mileage !== null && latest?.mileage !== undefined) lines.push(`📊 ${formatMileage(latest.mileage, latest.mileageUnit, latest.normalizedMileageKm)}`);
+        if (listing.url) lines.push(`🔗 <a href="${escapeHtml(listing.url)}">${ru ? "Открыть объявление" : "Відкрити оголошення"}</a>`);
+      }
+    } else {
+      lines.push(ru ? "📊 <b>ИСТОРИЯ ПРОБЕГА</b>" : "📊 <b>ІСТОРІЯ ПРОБІГУ</b>");
+      if (!history?.mileage.length) lines.push(ru ? "Доступных записей пробега нет. Starcar не делает вывод без источника." : "Доступних записів пробігу немає. Starcar не робить висновок без джерела.");
+      for (const point of history?.mileage ?? []) lines.push("", `${formatDate(point.date)} · ${escapeHtml(point.source)}`, formatMileage(point.mileage, point.unit, point.normalizedMileageKm));
+      for (const warning of history?.odometerWarnings ?? []) lines.push("", `🔴 ${ru ? "Возможное снижение показаний" : "Можливе зниження показань"}: ${warning.previous.normalizedMileageKm.toLocaleString("uk-UA")} км → ${warning.current.normalizedMileageKm.toLocaleString("uk-UA")} км`);
+    }
+    return splitLines(lines);
   }
 
   static renderAnalyticsSection(data: VehicleReportData, language: Language): string[] {
@@ -381,8 +439,17 @@ export class ReportRenderer {
         ? "⚠️ В доступных данных обнаружено различие характеристик, но из-за отсутствия VIN невозможно подтвердить, что записи относятся к одному автомобилю. Изменения не показаны как факт."
         : "⚠️ У доступних даних виявлено відмінність характеристик, але через відсутність VIN неможливо підтвердити, що записи належать одному автомобілю. Зміни не показані як факт.");
     } else lines.push(language === "ru" ? "Подтверждённых изменений характеристик не найдено." : "Підтверджених змін характеристик не знайдено.");
+    for (const warning of data.externalHistory?.data?.crossSourceWarnings ?? []) {
+      lines.push("", `⚠️ ${escapeHtml(warning.message)}`);
+      for (const [source, value] of Object.entries(warning.sources)) {
+        lines.push(`${escapeHtml(source)}: ${escapeHtml(value)}`);
+      }
+    }
+    if (data.externalHistory?.data?.odometerWarnings.length) {
+      lines.push("", language === "ru" ? "🔴 Обнаружены возможные несоответствия пробега." : "🔴 Виявлено можливі невідповідності пробігу.");
+    }
     lines.push("", ...wantedBrief(data, language));
-    let score = 100;
+    let score = data.externalHistory?.data?.historyScore ?? 100;
     if (!vehicle.v) score -= 10;
     if (data.wanted.status === "match") score -= 50;
     score -= Math.min(20, Math.max(0, ownerCount(data, language) - 2) * 5);
@@ -393,6 +460,7 @@ export class ReportRenderer {
         ? "Индекс является автоматической аналитикой Starcar и не является техническим заключением."
         : "Індекс є автоматичною аналітикою Starcar і не є технічним висновком.",
     );
+    for (const factor of data.externalHistory?.data?.scoreFactors ?? []) lines.push(`• ${escapeHtml(factor)}`);
     return splitLines(lines);
   }
 
@@ -402,9 +470,13 @@ export class ReportRenderer {
       const operation = RegistrationOperationFormatter.format(event, language);
       lines.push(`\n${formatDate(event[0])} · 🇺🇦\n${operation.icon} ${escapeHtml(operation.label)}`);
     }
-    lines.push(language === "ru"
-      ? "\nВнешние аукционные, рекламные и пробеговые события появятся только после подключения разрешённых источников."
-      : "\nЗовнішні аукціонні, рекламні події та події пробігу з’являться лише після підключення дозволених джерел.");
+    for (const event of (data.externalHistory?.data?.timeline ?? []).filter((item) => item.type !== "registration")) {
+      const details = [event.description, event.mileageKm === null ? null : `${event.mileageKm.toLocaleString("uk-UA")} км`, event.price === null ? null : formatMoney(event.price, event.currency)].filter(Boolean).join(" · ");
+      lines.push(`\n${formatDate(event.date)} · ${escapeHtml(event.source)}\n${escapeHtml(event.title)}${details ? ` · ${escapeHtml(details)}` : ""}`);
+    }
+    if (!(data.externalHistory?.data?.timeline ?? []).some((item) => item.type !== "registration")) lines.push(language === "ru"
+      ? "\nВнешних аукционных или рекламных событий в доступных источниках нет."
+      : "\nЗовнішніх аукціонних або рекламних подій у доступних джерелах немає.");
     return splitLines(lines);
   }
 
@@ -417,7 +489,10 @@ export class ReportRenderer {
         ? `Starcar формирует историю по подключённым источникам. Доступная регистрационная история содержит данные примерно с ${data.source.historyStartYear} года. Ранние события, номера и смены владельцев могут отсутствовать.`
         : `Starcar формує історію за підключеними джерелами. Доступна реєстраційна історія містить дані приблизно з ${data.source.historyStartYear} року. Ранні події, номери та зміни власників можуть бути відсутні.`}`
       + `\n\n<a href="${escapeHtml(data.wanted.sourceUrl ?? "https://data.gov.ua")}">${language === "ru" ? "Открытый реестр розыска Национальной полиции" : "Відкритий реєстр розшуку Національної поліції"}</a>`
-      + `\n<a href="${escapeHtml(data.insurance.checkUrl)}">${language === "ru" ? "Официальная проверка ОСАГО МТСБУ" : "Офіційна перевірка ОСЦПВ МТСБУ"}</a>`,
+      + `\n<a href="${escapeHtml(data.insurance.checkUrl)}">${language === "ru" ? "Официальная проверка ОСАГО МТСБУ" : "Офіційна перевірка ОСЦПВ МТСБУ"}</a>`
+      + `\n<a href="https://auto.ria.com/uk/">AUTO.RIA</a>`
+      + `\n<a href="https://apibara.tech/">${language === "ru" ? "API истории Copart/IAAI" : "API історії Copart/IAAI"}</a>`
+      + `\n<a href="${escapeHtml(data.externalHistory?.bidfaxUrl ?? "https://bidfax.co/")}">BidFax</a>`,
     ];
   }
 
@@ -429,9 +504,9 @@ export class ReportRenderer {
       case "vin": return this.renderVinSection(data, language);
       case "import": return this.renderImportSection(data, language);
       case "insurance": return this.renderInsuranceSection(data, language);
-      case "auctions": return this.renderExternalSection("auctions", language);
-      case "marketplace": return this.renderExternalSection("marketplace", language);
-      case "odometer": return this.renderExternalSection("odometer", language);
+      case "auctions": return this.renderExternalSection(data, "auctions", language);
+      case "marketplace": return this.renderExternalSection(data, "marketplace", language);
+      case "odometer": return this.renderExternalSection(data, "odometer", language);
       case "analytics": return this.renderAnalyticsSection(data, language);
       case "timeline": return this.renderTimelineSection(data, language);
       case "sources": return this.renderSourcesSection(data, language);
@@ -448,9 +523,9 @@ export class ReportRenderer {
       ...this.renderImportSection(data, language),
       ...this.renderInsuranceSection(data, language),
       ...wantedBrief(data, language),
-      ...this.renderExternalSection("auctions", language),
-      ...this.renderExternalSection("marketplace", language),
-      ...this.renderExternalSection("odometer", language),
+      ...this.renderExternalSection(data, "auctions", language),
+      ...this.renderExternalSection(data, "marketplace", language),
+      ...this.renderExternalSection(data, "odometer", language),
       ...this.renderAnalyticsSection(data, language),
       ...this.renderTimelineSection(data, language),
       ...this.renderSourcesSection(data, language),

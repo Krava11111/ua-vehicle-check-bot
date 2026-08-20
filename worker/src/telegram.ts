@@ -65,6 +65,10 @@ export function vehicleReportKeyboard(
   }
   if (vin) {
     rows.push([{
+      text: language === "ru" ? "📊 Полный отчёт" : "📊 Повний звіт",
+      callback_data: `full:${vin}`,
+    }]);
+    rows.push([{
       text: language === "ru" ? "📋 Скопировать VIN" : "📋 Скопіювати VIN",
       copy_text: { text: vin },
     }]);
@@ -96,6 +100,8 @@ export function basicReportKeyboard(
   language: Language,
   reference: string,
   plate: string | null,
+  vin: string | null = null,
+  bidfaxUrl: string | null = null,
 ): Record<string, unknown> {
   const rows: Array<Array<Record<string, unknown>>> = [
     [{ text: language === "ru" ? "📊 Полный отчёт" : "📊 Повний звіт", callback_data: `full:${reference}` }],
@@ -105,6 +111,16 @@ export function basicReportKeyboard(
     text: language === "ru" ? "🔖 История номера" : "🔖 Історія номера",
     callback_data: `plate_history:${plate}`,
   }]);
+  if (vin) {
+    rows.push([{
+      text: language === "ru" ? `📋 Скопировать VIN ${vin}` : `📋 Скопіювати VIN ${vin}`,
+      copy_text: { text: vin },
+    }]);
+    if (bidfaxUrl) rows.push([{
+      text: language === "ru" ? "🔎 Проверить VIN на BidFax" : "🔎 Перевірити VIN на BidFax",
+      url: bidfaxUrl,
+    }]);
+  }
   rows.push(
     [{
       text: language === "ru" ? "🛡 Проверить ОСАГО в МТСБУ" : "🛡 Перевірити ОСЦПВ у МТСБУ",
@@ -153,12 +169,33 @@ export function sectionKeyboard(
   language: Language,
   reference: string,
   section?: FullReportSection,
+  vin: string | null = null,
+  bidfaxUrl: string | null = null,
 ): Record<string, unknown> {
   const rows: Array<Array<Record<string, unknown>>> = [];
   if (section === "insurance") {
     rows.push([{
       text: language === "ru" ? "🛡 Проверить ОСАГО в МТСБУ" : "🛡 Перевірити ОСЦПВ у МТСБУ",
       url: "https://policy.mtsbu.ua/Search/Main/",
+    }]);
+  }
+  if (section === "auctions" && vin) {
+    rows.push([{
+      text: language === "ru" ? "📋 Скопировать VIN" : "📋 Скопіювати VIN",
+      copy_text: { text: vin },
+    }]);
+    rows.push([
+      {
+        text: "🇺🇸 Copart",
+        url: `https://www.copart.com/lotSearchResults?free=true&query=${encodeURIComponent(vin)}`,
+      },
+      ...(bidfaxUrl ? [{ text: "🔎 BidFax", url: bidfaxUrl }] : []),
+    ]);
+  }
+  if (section === "marketplace") {
+    rows.push([{
+      text: "AUTO.RIA",
+      url: "https://auto.ria.com/uk/",
     }]);
   }
   rows.push([

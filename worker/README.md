@@ -4,6 +4,10 @@ This directory contains the zero-VPS deployment of the Telegram vehicle bot. The
 accepts Telegram webhooks and reads only the required gzip shard from a GitHub Release ZIP
 using HTTP Range. The full MVS dataset and even the full ZIP are never stored on the Worker.
 
+Cloudflare D1 stores optional VIN-linked marketplace/auction history, immutable listing
+snapshots, original and normalized mileage values, source photo URLs and provider usage.
+The official MVS and wanted indexes remain in GitHub Releases; D1 does not duplicate them.
+
 ## Data flow
 
 1. `.github/workflows/update-vehicle-index.yml` checks registration and National Police
@@ -51,15 +55,34 @@ project.
    npx wrangler secret put BOT_TOKEN
    npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
    npx wrangler secret put WEBHOOK_SECRET_PATH
+   npx wrangler secret put HISTORY_IMPORT_SECRET
+   npx wrangler secret put AUTO_RIA_API_KEY
+   npx wrangler secret put AUCTION_API_KEY
    ```
 
-7. Deploy and copy the resulting `https://...workers.dev` URL:
+7. Create D1 once and apply migrations. Keep the generated database ID in `wrangler.toml`:
+
+   ```powershell
+   npx wrangler d1 create ua-vehicle-history
+   npx wrangler d1 migrations apply ua-vehicle-history --remote
+   ```
+
+8. Deploy and copy the resulting `https://...workers.dev` URL:
 
    ```powershell
    npm run deploy
    ```
 
-8. Register the webhook. Replace the placeholders with the same secret values used above:
+9. Register the webhook. The deployed Worker can safely register both Telegram message and
+   callback updates without revealing `BOT_TOKEN`. Send the import secret only in the header:
+
+   ```powershell
+   Invoke-RestMethod -Method Post \
+     -Uri "https://ua-vehicle-check-bot.YOUR-SUBDOMAIN.workers.dev/admin/register-webhook" \
+     -Headers @{ Authorization = "Bearer YOUR_HISTORY_IMPORT_SECRET" }
+   ```
+
+   The equivalent direct Telegram call is:
 
    ```powershell
    $botToken = 'TOKEN_FROM_BOTFATHER'
@@ -77,7 +100,71 @@ project.
      } | ConvertTo-Json)
    ```
 
-9. Verify `https://...workers.dev/health` and send `/start` to the bot.
+10. Verify `https://...workers.dev/health` and send `/start` to the bot.
+
+## External vehicle-history providers
+
+For a VIN search, the Worker can refresh two documented API providers and persist normalized
+results in D1:
+
+- `AUTO_RIA_API_KEY` enables current AUTO.RIA advertisements. Every returned record is accepted
+  only when its VIN exactly matches the requested VIN, and the report links back to AUTO.RIA.
+- `AUCTION_API_KEY` enables Apibara's documented vehicle-auction endpoint for Copart/IAAI
+  history. Set `AUCTION_API_BASE_URL` only when the provider gives a different API base URL.
+- BidFax is offered as an external manual-check button with a copy-VIN button. Starcar does not
+  scrape BidFax or claim that its public website provides an API.
+
+External API errors never suppress the MVS/wanted report. A provider is shown as not configured,
+temporarily unavailable, connected with no match, or connected with evidence. Provider refreshes
+are cached for six hours by default; changing the configured secret automatically uses a new cache
+variant.
+
+## Legal external-history import
+
+The Worker does not scrape AUTO.RIA, Copart or IAAI and does not invent undocumented endpoints.
+When a provider supplies data through a documented contract that permits this use, normalize
+the provider response into the import contract and send it to the protected endpoint:
+
+```http
+POST /admin/history/import
+Authorization: Bearer HISTORY_IMPORT_SECRET
+Content-Type: application/json
+```
+
+Example shape (values must come from the real source; do not fabricate production records):
+
+```json
+{
+  "marketplace": [{
+    "provider": "PROVIDER_NAME",
+    "externalId": "SOURCE_LISTING_ID",
+    "vin": "17_CHARACTER_VIN",
+    "observedAt": "2026-08-20T12:00:00Z",
+    "price": 0,
+    "currency": "USD",
+    "mileage": 0,
+    "mileageUnit": "km",
+    "isActive": true
+  }],
+  "auctions": [{
+    "provider": "LEGAL_API_NAME",
+    "externalId": "SOURCE_LOT_ID",
+    "vin": "17_CHARACTER_VIN",
+    "auctionDate": "2026-08-20T12:00:00Z",
+    "photoUrls": []
+  }]
+}
+```
+
+Imports are idempotent by `provider + externalId`. A marketplace snapshot is created only when
+price, mileage, description hash or active state changes. Miles are stored unchanged and also
+normalized with `1 mile = 1.609344 km`. The service does not store seller names, phone numbers
+or other personal data, and photo files remain at the source; D1 stores only permitted URLs.
+
+The full-report button retrieves MVS/wanted data as before, then adds D1 auction events,
+damage labels exactly as supplied, listing/price history, odometer warnings, repeated sale
+periods, cross-source mismatches, timeline and the explicitly non-official history score.
+Missing external records are described only as missing from connected sources.
 
 ## Local checks
 
@@ -133,6 +220,9 @@ python ..\tools\build_release_index.py build-wanted \
   be reused, and never describes the first known event as a proven first registration. Worker
   isolates cache an already-read plate result for 24 hours; no Redis or paid Cloudflare database
   is required.
+- D1 is an optional enrichment store. If it is unavailable, the main MVS/wanted report still
+  works and the Worker reports enrichment storage as unavailable rather than returning a false
+  negative.
 - The report does not claim a vehicle-specific ДТП result. Published police crash statistics do
   not provide a reliable public VIN/plate-to-crash mapping.
 - Every vehicle report offers buttons to copy its current plate/VIN and opens the official

@@ -8,6 +8,37 @@ export interface Env {
   MAX_CANDIDATES?: string;
   MAX_PLATE_HISTORY_CANDIDATES?: string;
   VEHICLE_HISTORY_START_YEAR?: string;
+  HISTORY_DB?: D1DatabaseLike;
+  HISTORY_IMPORT_SECRET?: string;
+  HISTORY_CACHE_TTL?: string;
+  ODOMETER_ROLLBACK_TOLERANCE_KM?: string;
+  HISTORY_SCORE_ENABLED?: string;
+  AUTO_RIA_API_KEY?: string;
+  AUTO_RIA_SEARCH_URL?: string;
+  AUTO_RIA_INFO_URL?: string;
+  AUCTION_API_KEY?: string;
+  AUCTION_API_BASE_URL?: string;
+  BIDFAX_BASE_URL?: string;
+}
+
+export interface D1ResultLike<T = Record<string, unknown>> {
+  success: boolean;
+  results?: T[];
+  meta?: { changes?: number; last_row_id?: number };
+}
+
+export interface D1PreparedStatementLike {
+  bind(...values: unknown[]): D1PreparedStatementLike;
+  first<T = Record<string, unknown>>(): Promise<T | null>;
+  all<T = Record<string, unknown>>(): Promise<D1ResultLike<T>>;
+  run<T = Record<string, unknown>>(): Promise<D1ResultLike<T>>;
+}
+
+export interface D1DatabaseLike {
+  prepare(query: string): D1PreparedStatementLike;
+  batch<T = Record<string, unknown>>(
+    statements: D1PreparedStatementLike[],
+  ): Promise<D1ResultLike<T>[]>;
 }
 
 export interface ExecutionContextLike {
@@ -174,9 +205,11 @@ export interface VehicleReportData {
     checkUrl: string;
   };
   externalHistory: {
-    auctions: "not_connected";
-    marketplace: "not_connected";
-    odometer: "not_connected";
+    auctions: "available" | "empty" | "not_connected" | "unavailable";
+    marketplace: "available" | "empty" | "not_connected" | "unavailable";
+    odometer: "available" | "empty" | "not_connected" | "unavailable";
+    data: ExternalVehicleHistory | null;
+    bidfaxUrl: string | null;
   };
   source: {
     label: string;
@@ -223,4 +256,180 @@ export interface PlateHistoryResult {
   totalAssignments: number;
   truncated: boolean;
   source: "plate-history" | "vehicle-fallback";
+}
+
+export type Confidence = "HIGH" | "MEDIUM" | "LOW";
+export type WarningSeverity = "LOW" | "MEDIUM" | "HIGH";
+
+export interface MarketplaceSnapshot {
+  observedAt: string;
+  price: number | null;
+  currency: string | null;
+  mileage: number | null;
+  mileageUnit: string | null;
+  normalizedMileageKm: number | null;
+  descriptionHash: string | null;
+  isActive: boolean;
+}
+
+export interface MarketplaceListingHistory {
+  provider: string;
+  externalId: string;
+  vin: string;
+  url: string | null;
+  title: string | null;
+  brand: string | null;
+  normalizedBrand: string | null;
+  model: string | null;
+  normalizedModel: string | null;
+  year: number | null;
+  city: string | null;
+  region: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  removedAt: string | null;
+  isActive: boolean;
+  snapshots: MarketplaceSnapshot[];
+}
+
+export interface AuctionHistoryEvent {
+  provider: string;
+  externalId: string;
+  vin: string;
+  auctionName: string | null;
+  lotNumber: string | null;
+  auctionDate: string | null;
+  location: string | null;
+  saleStatus: string | null;
+  finalBid: number | null;
+  currency: string | null;
+  estimatedRetailValue: number | null;
+  repairCost: number | null;
+  primaryDamage: string | null;
+  secondaryDamage: string | null;
+  odometer: number | null;
+  odometerUnit: string | null;
+  normalizedOdometerKm: number | null;
+  odometerStatus: string | null;
+  titleType: string | null;
+  keysAvailable: boolean | null;
+  runAndDrive: boolean | null;
+  engineStarts: boolean | null;
+  sourceUrl: string | null;
+  brand: string | null;
+  normalizedBrand: string | null;
+  model: string | null;
+  normalizedModel: string | null;
+  year: number | null;
+  color: string | null;
+  engineCapacity: number | null;
+  photos: string[];
+}
+
+export interface MileagePoint {
+  date: string;
+  mileage: number;
+  unit: string;
+  normalizedMileageKm: number;
+  source: string;
+  sourceReference: string | null;
+  sourceUrl: string | null;
+  confidence: Confidence;
+}
+
+export interface OdometerWarning {
+  severity: WarningSeverity;
+  previous: MileagePoint;
+  current: MileagePoint;
+  differenceKm: number;
+}
+
+export interface CrossSourceWarning {
+  field: string;
+  message: string;
+  sources: Record<string, string>;
+}
+
+export interface TimelineEvent {
+  date: string;
+  type: "registration" | "auction" | "marketplace";
+  source: string;
+  title: string;
+  description: string | null;
+  mileageKm: number | null;
+  price: number | null;
+  currency: string | null;
+  confidence: Confidence;
+}
+
+export interface ExternalVehicleHistory {
+  vin: string;
+  marketplace: MarketplaceListingHistory[];
+  auctions: AuctionHistoryEvent[];
+  mileage: MileagePoint[];
+  odometerWarnings: OdometerWarning[];
+  crossSourceWarnings: CrossSourceWarning[];
+  timeline: TimelineEvent[];
+  repeatedSalePeriods: number;
+  historyScore: number | null;
+  scoreFactors: string[];
+  storageAvailable: boolean;
+}
+
+export interface MarketplaceImportRecord {
+  provider: string;
+  externalId: string;
+  vin: string;
+  url?: string | null;
+  title?: string | null;
+  brand?: string | null;
+  model?: string | null;
+  year?: number | null;
+  price?: number | null;
+  currency?: string | null;
+  mileage?: number | null;
+  mileageUnit?: string | null;
+  city?: string | null;
+  region?: string | null;
+  descriptionHash?: string | null;
+  sellerType?: string | null;
+  observedAt: string;
+  isActive?: boolean;
+}
+
+export interface AuctionImportRecord {
+  provider: string;
+  externalId: string;
+  vin: string;
+  auctionName?: string | null;
+  lotNumber?: string | null;
+  auctionDate?: string | null;
+  location?: string | null;
+  sellerType?: string | null;
+  saleStatus?: string | null;
+  finalBid?: number | null;
+  currency?: string | null;
+  estimatedRetailValue?: number | null;
+  repairCost?: number | null;
+  primaryDamage?: string | null;
+  secondaryDamage?: string | null;
+  odometer?: number | null;
+  odometerUnit?: string | null;
+  odometerStatus?: string | null;
+  titleType?: string | null;
+  keysAvailable?: boolean | null;
+  runAndDrive?: boolean | null;
+  engineStarts?: boolean | null;
+  sourceUrl?: string | null;
+  brand?: string | null;
+  model?: string | null;
+  year?: number | null;
+  color?: string | null;
+  engineCapacity?: number | null;
+  photoUrls?: string[];
+}
+
+export interface HistoryImportPayload {
+  marketplace?: MarketplaceImportRecord[];
+  auctions?: AuctionImportRecord[];
 }

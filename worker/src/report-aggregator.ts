@@ -2,11 +2,13 @@ import { sha256Prefix } from "./index-client.js";
 import { orderedEvents } from "./presentation.js";
 import type {
   IndexManifest,
+  ExternalVehicleHistory,
   VehicleCandidate,
   VehicleMatch,
   VehicleReportData,
   WantedCheck,
 } from "./types.js";
+import type { ProviderRefreshResult } from "./external-providers.js";
 
 export async function candidateId(vehicleKey: string): Promise<string> {
   return sha256Prefix(vehicleKey, 12);
@@ -54,7 +56,23 @@ export class VehicleReportAggregator {
     manifest: IndexManifest,
     wanted: WantedCheck,
     configuredHistoryStartYear = 2013,
+    external: ExternalVehicleHistory | null = null,
+    providerStatus: ProviderRefreshResult = {
+      autoRia: "not_configured",
+      auctions: "not_configured",
+      checkedAt: new Date().toISOString(),
+    },
+    bidfaxBaseUrl = "https://bidfax.co/",
   ): Promise<VehicleReportData> {
+    const availability = (
+      connection: ProviderRefreshResult["autoRia"],
+      count: number,
+    ): "available" | "empty" | "not_connected" | "unavailable" => {
+      if (connection === "not_configured") return "not_connected";
+      if (connection === "unavailable") return "unavailable";
+      return count ? "available" : "empty";
+    };
+    const vin = match.vehicle.v;
     return {
       schemaVersion: 1,
       reference: await reportReference(match),
@@ -67,9 +85,13 @@ export class VehicleReportAggregator {
         checkUrl: "https://policy.mtsbu.ua/Search/Main/",
       },
       externalHistory: {
-        auctions: "not_connected",
-        marketplace: "not_connected",
-        odometer: "not_connected",
+        auctions: availability(providerStatus.auctions, external?.auctions.length ?? 0),
+        marketplace: availability(providerStatus.autoRia, external?.marketplace.length ?? 0),
+        odometer: !external?.storageAvailable
+          ? "not_connected"
+          : external.mileage.length ? "available" : "empty",
+        data: external,
+        bidfaxUrl: vin ? bidfaxBaseUrl : null,
       },
       source: {
         label: manifest.source_label,

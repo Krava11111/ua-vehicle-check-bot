@@ -1,4 +1,6 @@
 import { renderWantedCheck } from "./analytics.js";
+import { refreshExternalProviders } from "./external-providers.js";
+import { ExternalHistoryService, importHistory } from "./history.js";
 import { checkWanted, findPlateHistory, findVehicles, loadManifest } from "./index-client.js";
 import { detectQuery, languageFor, normalizePlate } from "./normalization.js";
 import { renderPlateHistory } from "./plate-history.js";
@@ -26,6 +28,7 @@ import type {
   Env,
   ExecutionContextLike,
   FullReportSection,
+  HistoryImportPayload,
   IndexManifest,
   Language,
   TelegramCallbackQuery,
@@ -34,6 +37,7 @@ import type {
   VehicleMatch,
   VehicleReportData,
 } from "./types.js";
+import type { ProviderRefreshResult } from "./external-providers.js";
 
 const MEMORY_LIMITS = new Map<string, { minute: number; count: number }>();
 const PENDING_PLATE_HISTORY = new Map<string, number>();
@@ -214,7 +218,34 @@ async function aggregate(
   env: Env,
 ): Promise<VehicleReportData> {
   const wanted = await checkWanted([match.vehicle.p, match.vehicle.v], manifest);
-  const report = await VehicleReportAggregator.build(match, manifest, wanted, historyStartYear(manifest, env));
+  const vin = match.vehicle.v;
+  let external = null;
+  let providerStatus: ProviderRefreshResult = {
+    autoRia: env.AUTO_RIA_API_KEY ? "connected" as const : "not_configured" as const,
+    auctions: env.AUCTION_API_KEY ? "connected" as const : "not_configured" as const,
+    checkedAt: new Date().toISOString(),
+  };
+  if (vin) {
+    try {
+      providerStatus = await refreshExternalProviders(vin, env);
+    } catch (error) {
+      console.error("external_provider_refresh_failed", error instanceof Error ? error.message : String(error));
+    }
+    try {
+      external = await new ExternalHistoryService().getByVin(vin, match, env);
+    } catch (error) {
+      console.error("external_history_read_failed", error instanceof Error ? error.message : String(error));
+    }
+  }
+  const report = await VehicleReportAggregator.build(
+    match,
+    manifest,
+    wanted,
+    historyStartYear(manifest, env),
+    external,
+    providerStatus,
+    env.BIDFAX_BASE_URL ?? "https://bidfax.co/",
+  );
   await putReport(report);
   return report;
 }
@@ -236,7 +267,13 @@ async function showBasicReport(
   env: Env,
   target: number | TelegramMessage,
 ): Promise<void> {
-  const keyboard = basicReportKeyboard(language, report.reference, report.match.vehicle.p);
+  const keyboard = basicReportKeyboard(
+    language,
+    report.reference,
+    report.match.vehicle.p,
+    report.match.vehicle.v,
+    report.externalHistory?.bidfaxUrl,
+  );
   const text = ReportRenderer.renderBasicReport(report, language);
   if (typeof target === "number") await sendMessage(env, target, text, keyboard);
   else await editMessage(env, target, text, keyboard);
@@ -397,8 +434,15 @@ async function handleCallback(query: TelegramCallbackQuery, env: Env): Promise<v
       }
       const section = rawSection as FullReportSection;
       const parts = ReportRenderer.renderSection(report, section, language);
-      await editMessage(env, message, parts[0] ?? "—", sectionKeyboard(language, reference, section));
-      for (const part of parts.slice(1)) await sendMessage(env, message.chat.id, part, sectionKeyboard(language, reference, section));
+      const keyboard = sectionKeyboard(
+        language,
+        reference,
+        section,
+        report.match.vehicle.v,
+        report.externalHistory?.bidfaxUrl,
+      );
+      await editMessage(env, message, parts[0] ?? "—", keyboard);
+      for (const part of parts.slice(1)) await sendMessage(env, message.chat.id, part, keyboard);
       return;
     }
     if (query.data.startsWith("all:")) {
@@ -436,8 +480,45 @@ async function handleCallback(query: TelegramCallbackQuery, env: Env): Promise<v
   }
 }
 
+function adminAuthorized(request: Request, env: Env): boolean {
+  if (!env.HISTORY_IMPORT_SECRET) return false;
+  return request.headers.get("Authorization") === `Bearer ${env.HISTORY_IMPORT_SECRET}`;
+}
+
+async function registerTelegramWebhook(request: Request, env: Env): Promise<Response> {
+  if (!adminAuthorized(request, env)) return new Response("Forbidden", { status: 403 });
+  const origin = new URL(request.url).origin;
+  const webhookPath = env.WEBHOOK_SECRET_PATH.replace(/^\/+|\/+$/g, "");
+  await telegramCall(env.BOT_TOKEN, "setWebhook", {
+    url: `${origin}/${webhookPath}`,
+    secret_token: env.TELEGRAM_WEBHOOK_SECRET,
+    allowed_updates: ["message", "callback_query"],
+    drop_pending_updates: false,
+  });
+  return Response.json({ ok: true, webhook: `${origin}/***`, allowedUpdates: ["message", "callback_query"] });
+}
+
+async function importHistoryRequest(request: Request, env: Env): Promise<Response> {
+  if (!adminAuthorized(request, env)) return new Response("Forbidden", { status: 403 });
+  const length = Number(request.headers.get("Content-Length") ?? "0");
+  if (length > 1_000_000) return new Response("Payload too large", { status: 413 });
+  try {
+    const payload = (await request.json()) as HistoryImportPayload;
+    return Response.json({ ok: true, ...(await importHistory(payload, env)) });
+  } catch (error) {
+    console.error("history_import_failed", error instanceof Error ? error.message : String(error));
+    return Response.json({ ok: false, error: error instanceof Error ? error.message : "invalid_import" }, { status: 400 });
+  }
+}
+
 async function handleRequest(request: Request, env: Env, context: ExecutionContextLike): Promise<Response> {
   const url = new URL(request.url);
+  if (request.method === "POST" && url.pathname === "/admin/history/import") {
+    return importHistoryRequest(request, env);
+  }
+  if (request.method === "POST" && url.pathname === "/admin/register-webhook") {
+    return registerTelegramWebhook(request, env);
+  }
   if (request.method === "GET" && url.pathname === "/health") {
     try {
       const manifest = await loadManifest(env.INDEX_MANIFEST_URL);
@@ -453,6 +534,12 @@ async function handleRequest(request: Request, env: Env, context: ExecutionConte
         vehicleClustering: manifest.schema_version >= 5 ? "vin-stable-id-characteristics" : "legacy",
         wantedVersion: manifest.wanted?.version ?? null,
         wantedUpdatedAt: manifest.wanted?.dataset_updated_at ?? null,
+        historyStorage: env.HISTORY_DB ? "d1" : "unavailable",
+        externalProviders: {
+          autoRia: env.AUTO_RIA_API_KEY ? "configured" : "not_configured",
+          copartIaai: env.AUCTION_API_KEY ? "configured" : "not_configured",
+          bidfax: "external_vin_check",
+        },
       });
     } catch {
       return Response.json({ ok: false, error: "index_unavailable" }, { status: 503 });

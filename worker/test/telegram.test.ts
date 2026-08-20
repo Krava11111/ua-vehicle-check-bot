@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  basicReportKeyboard,
   insuranceKeyboard,
   mainKeyboard,
   plateHistoryResultKeyboard,
@@ -25,11 +26,21 @@ test("insurance section keeps an official MTSBU button", () => {
   assert.match(keyboard, /full:AA1234BB\.abcdef123456/);
 });
 
+test("auction and basic report buttons expose Copart and BidFax without scraping", () => {
+  const section = JSON.stringify(sectionKeyboard("ru", "AA1234BB.abcdef123456", "auctions", "WVWZZZ3CZHE123456", "https://bidfax.co/"));
+  assert.match(section, /copart\.com\/lotSearchResults/);
+  assert.match(section, /bidfax\.co/);
+  assert.match(section, /copy_text/);
+  const basic = JSON.stringify(basicReportKeyboard("uk", "AA1234BB.abcdef123456", "AA1234BB", "WVWZZZ3CZHE123456", "https://bidfax.co/"));
+  assert.match(basic, /BidFax/);
+});
+
 test("vehicle report lets the user copy plate and VIN before opening MTSBU", () => {
   const keyboard = JSON.stringify(vehicleReportKeyboard("ru", "AA1234BB", "WVWZZZ3CZHE123456"));
   assert.match(keyboard, /Скопировать номер AA1234BB/);
   assert.match(keyboard, /"copy_text":\{"text":"AA1234BB"\}/);
   assert.match(keyboard, /"copy_text":\{"text":"WVWZZZ3CZHE123456"\}/);
+  assert.match(keyboard, /"callback_data":"full:WVWZZZ3CZHE123456"/);
   assert.match(keyboard, /https:\/\/policy\.mtsbu\.ua\/Search\/Main\//);
   assert.match(keyboard, /plate_history:AA1234BB/);
 });
