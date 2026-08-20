@@ -98,7 +98,9 @@ python ..\tools\build_release_index.py build \
   exceeds the Worker's 12 MB safety limit. In that case increase `--prefix-length` and publish a
   new manifest schema/layout.
 - The worker shows source attribution required by the dataset licence.
-- The insurance button opens the official MTSBU policy-check service. MTSBU protects the
-  interactive search with Turnstile and does not publish a server API for this flow, so the
-  Worker does not scrape or bypass it and never treats a technical failure as "no policy".
+- Every vehicle report offers buttons to copy its current plate/VIN and opens the official
+  MTSBU policy-check service. MTSBU does not prefill the form from documented URL parameters,
+  protects the interactive search with Turnstile and does not publish a server API for this
+  flow, so the Worker does not scrape or bypass it and never treats a technical failure as
+  "no policy".
 - Do not commit the Telegram token or webhook secrets.

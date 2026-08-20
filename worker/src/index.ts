@@ -1,7 +1,7 @@
 import { renderVehicle } from "./format.js";
 import { findVehicles, loadManifest } from "./index-client.js";
 import { detectQuery, languageFor } from "./normalization.js";
-import { insuranceKeyboard, mainKeyboard, telegramCall } from "./telegram.js";
+import { insuranceKeyboard, mainKeyboard, telegramCall, vehicleReportKeyboard } from "./telegram.js";
 import type { Env, ExecutionContextLike, Language, TelegramMessage, TelegramUpdate } from "./types.js";
 
 const MEMORY_LIMITS = new Map<string, { minute: number; count: number }>();
@@ -125,7 +125,15 @@ async function handleMessage(message: TelegramMessage, env: Env): Promise<void> 
       await send(textFor(language, "notFound"), true);
       return;
     }
-    for (const match of matches) await send(renderVehicle(match, manifest, language));
+    for (const match of matches) {
+      await telegramCall(env.BOT_TOKEN, "sendMessage", {
+        chat_id: message.chat.id,
+        text: renderVehicle(match, manifest, language),
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+        reply_markup: vehicleReportKeyboard(language, match.vehicle.p, match.vehicle.v),
+      });
+    }
   } catch (error) {
     console.error("vehicle_lookup_failed", error instanceof Error ? error.message : String(error));
     await send(textFor(language, "unavailable"), true);

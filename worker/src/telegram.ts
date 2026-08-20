@@ -36,3 +36,28 @@ export function insuranceKeyboard(language: Language): Record<string, unknown> {
     }]],
   };
 }
+
+export function vehicleReportKeyboard(
+  language: Language,
+  plate: string | null,
+  vin: string | null,
+): Record<string, unknown> {
+  const rows: Array<Array<Record<string, unknown>>> = [];
+  if (plate) {
+    rows.push([{
+      text: language === "ru" ? `📋 Скопировать номер ${plate}` : `📋 Скопіювати номер ${plate}`,
+      copy_text: { text: plate },
+    }]);
+  }
+  if (vin) {
+    rows.push([{
+      text: language === "ru" ? "📋 Скопировать VIN" : "📋 Скопіювати VIN",
+      copy_text: { text: vin },
+    }]);
+  }
+  rows.push([{
+    text: language === "ru" ? "🛡 Проверить страховку в МТСБУ" : "🛡 Перевірити страховку в МТСБУ",
+    url: "https://policy.mtsbu.ua/Search/Main/",
+  }]);
+  return { inline_keyboard: rows };
+}
