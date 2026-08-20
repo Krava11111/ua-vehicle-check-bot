@@ -173,9 +173,18 @@ function auctionRecords(payload: unknown): Record<string, unknown>[] {
   return Object.keys(dataRecord).length ? [dataRecord] : [];
 }
 
+function auctionRecordVin(item: Record<string, unknown>): string | null {
+  const direct = normalizeVin(item.vin);
+  if (direct) return direct;
+  const slug = text(item.slug_vin);
+  const suffix = slug?.split("-").at(-1);
+  return normalizeVin(suffix);
+}
+
 function photoUrls(item: Record<string, unknown>): string[] {
   const media = nested(item, "media");
   const candidates = [item.photos, item.photo_urls, media.photos, media.images];
+  candidates.push(media.thumbs, media.items);
   for (const candidate of candidates) {
     const urls = array(candidate)
       .map((value) => typeof value === "string" ? value : text(record(value).url, record(value).src))
@@ -207,20 +216,23 @@ async function auctionRecord(
   const externalId = lot
     ? `${platform}:${lot}`
     : `${platform}:${await shortHash(JSON.stringify(item))}`;
-  const mileage = number(odometer.value, odometer.miles, item.odometer, item.mileage);
+  const miles = number(odometer.mi, odometer.miles);
+  const kilometres = number(odometer.km);
+  const mileage = miles ?? kilometres ?? number(odometer.value, item.odometer, item.mileage);
   const mileageUnit = text(odometer.unit, item.odometer_unit, item.mileage_unit)
-    ?? (odometer.miles !== undefined ? "mi" : null);
+    ?? (miles !== null ? "mi" : kilometres !== null ? "km" : null);
+  const runCondition = text(record(condition.run_condition).value, condition.run_condition);
   return {
     provider: "auction-api",
     externalId,
     vin,
     auctionName: platform,
     lotNumber: lot,
-    auctionDate: isoDate(auction.sale_date, auction.date, item.sale_date, item.auction_date, item.date),
-    location: text(location.name, location.city, item.location, item.facility),
+    auctionDate: isoDate(auction.sale_date, auction.auction_at, auction.full_date, auction.date, item.sale_date, item.auction_date, item.ad, item.date),
+    location: text(location.display, location.name, location.city, location.send_from, item.location, item.facility),
     sellerType: text(nested(item, "seller").type, item.seller_type),
-    saleStatus: text(auction.sale_status, auction.status, item.sale_status, item.status),
-    finalBid: number(pricing.last_sold_price, pricing.final_bid, item.final_bid, item.sale_price),
+    saleStatus: text(auction.sale_status, auction.state, auction.status, item.sale_status, item.status),
+    finalBid: number(pricing.last_sold_price, pricing.last_sold_price_usd, pricing.final_bid, item.final_bid, item.sale_price),
     currency: text(pricing.currency, item.currency) ?? "USD",
     estimatedRetailValue: number(pricing.estimated_retail_value, item.estimated_retail_value),
     repairCost: number(condition.repair_cost, item.repair_cost),
@@ -230,28 +242,45 @@ async function auctionRecord(
     odometerUnit: mileageUnit,
     odometerStatus: text(odometer.status, item.odometer_status),
     titleType: text(saleDocument.name, saleDocument.type, item.title_type, item.title_code),
-    keysAvailable: boolean(condition.keys_available, item.keys_available),
-    runAndDrive: boolean(condition.run_and_drive, item.run_and_drive),
-    engineStarts: boolean(condition.engine_starts, item.engine_starts),
+    keysAvailable: boolean(condition.keys_available, condition.has_key, item.keys_available),
+    runAndDrive: boolean(condition.run_and_drive, item.run_and_drive) ?? (runCondition ? /RUNS? AND DRIVES?/i.test(runCondition) : null),
+    engineStarts: boolean(condition.engine_starts, item.engine_starts) ?? (runCondition ? /ENGINE START/i.test(runCondition) || /RUNS? AND DRIVES?/i.test(runCondition) : null),
     sourceUrl: text(item.url, item.source_url, item.lot_url),
     brand: text(item.make, item.brand),
     model: text(item.model),
     year: number(item.year),
-    color: text(specs.color, item.color),
+    color: text(specs.color, specs.exterior_color, item.color),
     engineCapacity: number(specs.engine_capacity, item.engine_capacity),
     photoUrls: photoUrls(item),
   };
 }
 
-async function fetchAuctions(vin: string, env: Env): Promise<AuctionImportRecord[]> {
+export async function fetchAuctions(vin: string, env: Env): Promise<AuctionImportRecord[]> {
   if (!env.AUCTION_API_KEY) return [];
   const base = (env.AUCTION_API_BASE_URL ?? "https://apibara.tech/api/v1/vehicle-auction").replace(/\/$/, "");
-  const response = await fetch(`${base}/vehicles/${encodeURIComponent(vin)}/history?per_page=20`, {
-    headers: { Accept: "application/json", "X-API-Key": env.AUCTION_API_KEY },
-    signal: AbortSignal.timeout(12_000),
-  });
-  const payload = await jsonResponse(response, "auction_api");
-  return Promise.all(auctionRecords(payload).map((item) => auctionRecord(item, vin)));
+  const headers = { Accept: "application/json", "X-API-Key": env.AUCTION_API_KEY };
+  const currentUrl = new URL(`${base}/vehicles`);
+  currentUrl.searchParams.set("s", vin);
+  currentUrl.searchParams.set("per_page", "20");
+  const [currentResponse, historyResponse] = await Promise.all([
+    fetch(currentUrl, { headers, signal: AbortSignal.timeout(12_000) }),
+    fetch(`${base}/vehicles/${encodeURIComponent(vin)}/history?per_page=20`, {
+      headers,
+      signal: AbortSignal.timeout(12_000),
+    }),
+  ]);
+  const [currentPayload, historyPayload] = await Promise.all([
+    jsonResponse(currentResponse, "auction_api_search"),
+    jsonResponse(historyResponse, "auction_api_history"),
+  ]);
+  const exact = [...auctionRecords(currentPayload), ...auctionRecords(historyPayload)]
+    .filter((item) => auctionRecordVin(item) === vin);
+  const unique = new Map<string, Record<string, unknown>>();
+  for (const item of exact) {
+    const key = `${text(item.platform, item.auction_name) ?? "auction"}:${text(item.lot_number, item.platform_id, item.id) ?? JSON.stringify(item)}`;
+    unique.set(key, item);
+  }
+  return Promise.all([...unique.values()].map((item) => auctionRecord(item, vin)));
 }
 
 export async function refreshExternalProviders(vinValue: string, env: Env): Promise<ProviderRefreshResult> {
