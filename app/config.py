@@ -45,6 +45,35 @@ class Settings(BaseSettings):
     history_coverage_start_year: int = 2013
     query_hash_salt: SecretStr = SecretStr("replace-with-long-random-value")
     dataset_default_url: str | None = None
+    auto_ria_enabled: bool = False
+    auto_ria_api_key: SecretStr = SecretStr("")
+    auto_ria_base_url: str = "https://developers.ria.com"
+    auto_ria_cache_ttl: int = 21600
+    auction_history_enabled: bool = False
+    auction_provider: str = "mock"
+    auction_api_key: SecretStr = SecretStr("")
+    auction_api_base_url: str = ""
+    auction_cache_ttl: int = 2592000
+    marketplace_provider: str = "disabled"
+    marketplace_refresh_hours: int = 12
+    free_auction_history: bool = True
+    free_auction_photos: bool = True
+    free_marketplace_history: bool = True
+    free_odometer_history: bool = True
+    free_full_report: bool = True
+    free_full_timeline: bool = True
+    free_history_score: bool = True
+    odometer_rollback_tolerance_km: int = 1000
+    external_provider_timeout_seconds: float = 10.0
+    external_provider_daily_limit: int = 1000
+    history_score_enabled: bool = True
+    history_score_auction_penalty: int = 8
+    history_score_damage_penalty: int = 12
+    history_score_odometer_low_penalty: int = 5
+    history_score_odometer_medium_penalty: int = 12
+    history_score_odometer_high_penalty: int = 25
+    history_score_mismatch_penalty: int = 7
+    history_score_repeated_sale_penalty: int = 5
 
     @field_validator("admin_ids", mode="before")
     @classmethod

@@ -95,6 +95,15 @@ class Vehicle(Base):
         cascade="all, delete-orphan",
         order_by="RegistrationEvent.registration_date",
     )
+    marketplace_listings: Mapped[list[MarketplaceListing]] = relationship(
+        back_populates="vehicle", cascade="all, delete-orphan"
+    )
+    auction_events: Mapped[list[AuctionEvent]] = relationship(
+        back_populates="vehicle", cascade="all, delete-orphan"
+    )
+    mileage_records: Mapped[list[MileageRecord]] = relationship(
+        back_populates="vehicle", cascade="all, delete-orphan"
+    )
 
 
 class RegistrationEvent(Base):
@@ -185,3 +194,173 @@ class ApplicationError(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )
+
+
+class MarketplaceListing(Base):
+    __tablename__ = "marketplace_listings"
+    __table_args__ = (
+        UniqueConstraint("provider", "external_id", name="uq_marketplace_provider_external"),
+        Index("ix_marketplace_vin_seen", "normalized_vin", "last_seen_at"),
+        Index("ix_marketplace_vehicle_seen", "vehicle_id", "last_seen_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(50))
+    external_id: Mapped[str] = mapped_column(String(255))
+    vehicle_id: Mapped[int | None] = mapped_column(ForeignKey("vehicles.id", ondelete="SET NULL"))
+    vin: Mapped[str | None] = mapped_column(String(32))
+    normalized_vin: Mapped[str] = mapped_column(String(17))
+    url: Mapped[str | None] = mapped_column(Text)
+    title: Mapped[str | None] = mapped_column(String(500))
+    brand: Mapped[str | None] = mapped_column(String(255))
+    normalized_brand: Mapped[str | None] = mapped_column(String(255))
+    model: Mapped[str | None] = mapped_column(String(255))
+    normalized_model: Mapped[str | None] = mapped_column(String(255))
+    year: Mapped[int | None] = mapped_column(Integer)
+    price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    currency: Mapped[str | None] = mapped_column(String(3))
+    mileage: Mapped[int | None] = mapped_column(Integer)
+    mileage_unit: Mapped[str | None] = mapped_column(String(10))
+    normalized_mileage_km: Mapped[int | None] = mapped_column(Integer)
+    city: Mapped[str | None] = mapped_column(String(255))
+    region: Mapped[str | None] = mapped_column(String(255))
+    description_hash: Mapped[str | None] = mapped_column(String(64))
+    seller_type: Mapped[str | None] = mapped_column(String(50))
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    vehicle: Mapped[Vehicle | None] = relationship(back_populates="marketplace_listings")
+    snapshots: Mapped[list[MarketplaceListingSnapshot]] = relationship(
+        back_populates="listing",
+        cascade="all, delete-orphan",
+        order_by="MarketplaceListingSnapshot.observed_at",
+    )
+
+
+class MarketplaceListingSnapshot(Base):
+    __tablename__ = "marketplace_listing_snapshots"
+    __table_args__ = (Index("ix_listing_snapshot_observed", "listing_id", "observed_at"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    listing_id: Mapped[int] = mapped_column(
+        ForeignKey("marketplace_listings.id", ondelete="CASCADE")
+    )
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    currency: Mapped[str | None] = mapped_column(String(3))
+    mileage: Mapped[int | None] = mapped_column(Integer)
+    mileage_unit: Mapped[str | None] = mapped_column(String(10))
+    normalized_mileage_km: Mapped[int | None] = mapped_column(Integer)
+    description_hash: Mapped[str | None] = mapped_column(String(64))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    listing: Mapped[MarketplaceListing] = relationship(back_populates="snapshots")
+
+
+class AuctionEvent(Base):
+    __tablename__ = "auction_events"
+    __table_args__ = (
+        UniqueConstraint("provider", "external_id", name="uq_auction_provider_external"),
+        Index("ix_auction_vin_date", "normalized_vin", "auction_date"),
+        Index("ix_auction_vehicle_date", "vehicle_id", "auction_date"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    vehicle_id: Mapped[int | None] = mapped_column(ForeignKey("vehicles.id", ondelete="SET NULL"))
+    vin: Mapped[str | None] = mapped_column(String(32))
+    normalized_vin: Mapped[str] = mapped_column(String(17))
+    provider: Mapped[str] = mapped_column(String(50))
+    auction_name: Mapped[str | None] = mapped_column(String(100))
+    lot_number: Mapped[str | None] = mapped_column(String(100))
+    auction_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    location: Mapped[str | None] = mapped_column(String(255))
+    seller_type: Mapped[str | None] = mapped_column(String(100))
+    sale_status: Mapped[str | None] = mapped_column(String(100))
+    final_bid: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    currency: Mapped[str | None] = mapped_column(String(3))
+    estimated_retail_value: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    repair_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    primary_damage: Mapped[str | None] = mapped_column(String(255))
+    secondary_damage: Mapped[str | None] = mapped_column(String(255))
+    odometer: Mapped[int | None] = mapped_column(Integer)
+    odometer_unit: Mapped[str | None] = mapped_column(String(10))
+    normalized_odometer_km: Mapped[int | None] = mapped_column(Integer)
+    odometer_status: Mapped[str | None] = mapped_column(String(100))
+    title_type: Mapped[str | None] = mapped_column(String(255))
+    keys_available: Mapped[bool | None] = mapped_column(Boolean)
+    run_and_drive: Mapped[bool | None] = mapped_column(Boolean)
+    engine_starts: Mapped[bool | None] = mapped_column(Boolean)
+    source_url: Mapped[str | None] = mapped_column(Text)
+    external_id: Mapped[str] = mapped_column(String(255))
+    brand: Mapped[str | None] = mapped_column(String(255))
+    normalized_brand: Mapped[str | None] = mapped_column(String(255))
+    model: Mapped[str | None] = mapped_column(String(255))
+    normalized_model: Mapped[str | None] = mapped_column(String(255))
+    year: Mapped[int | None] = mapped_column(Integer)
+    color: Mapped[str | None] = mapped_column(String(100))
+    engine_capacity: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    vehicle: Mapped[Vehicle | None] = relationship(back_populates="auction_events")
+    photos: Mapped[list[AuctionPhoto]] = relationship(
+        back_populates="auction_event",
+        cascade="all, delete-orphan",
+        order_by="AuctionPhoto.position",
+    )
+
+
+class AuctionPhoto(Base):
+    __tablename__ = "auction_photos"
+    __table_args__ = (
+        UniqueConstraint("auction_event_id", "source_url", name="uq_auction_photo_url"),
+        Index("ix_auction_photos_event", "auction_event_id"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    auction_event_id: Mapped[int] = mapped_column(
+        ForeignKey("auction_events.id", ondelete="CASCADE")
+    )
+    source_url: Mapped[str] = mapped_column(Text)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    auction_event: Mapped[AuctionEvent] = relationship(back_populates="photos")
+
+
+class MileageRecord(Base):
+    __tablename__ = "mileage_records"
+    __table_args__ = (
+        UniqueConstraint("fingerprint", name="uq_mileage_record_fingerprint"),
+        Index("ix_mileage_vin_date", "normalized_vin", "observed_at"),
+        Index("ix_mileage_vehicle_date", "vehicle_id", "observed_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    vehicle_id: Mapped[int | None] = mapped_column(ForeignKey("vehicles.id", ondelete="SET NULL"))
+    normalized_vin: Mapped[str] = mapped_column(String(17))
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    original_mileage: Mapped[int] = mapped_column(Integer)
+    original_unit: Mapped[str] = mapped_column(String(10))
+    normalized_mileage_km: Mapped[int] = mapped_column(Integer)
+    source: Mapped[str] = mapped_column(String(100))
+    source_reference: Mapped[str | None] = mapped_column(String(255))
+    source_url: Mapped[str | None] = mapped_column(Text)
+    confidence: Mapped[str] = mapped_column(String(10), default="MEDIUM")
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    vehicle: Mapped[Vehicle | None] = relationship(back_populates="mileage_records")
+
+
+class ProviderUsageDaily(Base):
+    __tablename__ = "provider_usage_daily"
+    __table_args__ = (UniqueConstraint("provider", "date", name="uq_provider_usage_date"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(50))
+    date: Mapped[date] = mapped_column(Date)
+    requests_count: Mapped[int] = mapped_column(Integer, default=0)
+    cache_hits: Mapped[int] = mapped_column(Integer, default=0)
+    cache_misses: Mapped[int] = mapped_column(Integer, default=0)
+    successful_requests: Mapped[int] = mapped_column(Integer, default=0)
+    failed_requests: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_cost: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=0)

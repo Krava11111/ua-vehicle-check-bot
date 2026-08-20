@@ -17,13 +17,19 @@ from app.locales import t
 from app.repositories import VehicleRepository
 from app.schemas.vehicle import VehicleReport
 from app.services.access import AccessService, Feature
+from app.services.auction_history.base import AuctionProvider
+from app.services.auction_history.service import AuctionHistoryService
 from app.services.insurance.base import InsuranceProvider
 from app.services.insurance.schemas import InsuranceStatus
 from app.services.insurance.service import InsuranceService
+from app.services.marketplace_history.base import MarketplaceProvider
+from app.services.marketplace_history.service import MarketplaceHistoryService
 from app.services.rate_limit import RateLimitService
 from app.services.reports import ReportService
 from app.services.search_history import SearchHistoryService
 from app.services.users import UserService
+from app.services.vehicle_history.schemas import ExtendedVehicleHistory
+from app.services.vehicle_history.service import VehicleHistoryService
 from app.services.vehicles import VehicleService
 
 router = Router(name="user")
@@ -190,6 +196,8 @@ async def text_search(
     settings: Settings,
     redis: Redis,
     bot: Bot,
+    marketplace_provider: MarketplaceProvider,
+    auction_provider: AuctionProvider,
 ) -> None:
     user = await current_user(message, session, settings)
     if user.is_blocked:
@@ -243,6 +251,21 @@ async def text_search(
     await state.update_data(
         last_report=report.model_dump(mode="json"), last_query=normalized, last_kind=kind.value
     )
+    extra = None
+    if report.vehicle.normalized_vin and AccessService(settings).can_access(
+        user, Feature.FULL_REPORT
+    ):
+        try:
+            extra = await VehicleHistoryService(
+                session,
+                MarketplaceHistoryService(session, marketplace_provider, Cache(redis), settings),
+                AuctionHistoryService(session, auction_provider, Cache(redis), settings),
+                settings,
+            ).build(report)
+        except Exception:
+            extra = None
+    if extra:
+        await state.update_data(last_extended=extra.model_dump(mode="json"))
     await message.answer(
         ReportService.render_vehicle(report, user.language), reply_markup=report_keyboard()
     )
@@ -267,6 +290,34 @@ async def show_history(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.message and raw:
         await callback.message.answer(
             ReportService.render_history(VehicleReport.model_validate(raw))
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "report:full")
+async def show_full_report(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    data = await state.get_data()
+    raw_report, raw_extra = data.get("last_report"), data.get("last_extended")
+    user = await UserService(session, settings).get_or_create(
+        callback.from_user.id, callback.from_user.username
+    )
+    if not AccessService(settings).can_access(user, Feature.FULL_REPORT):
+        await callback.answer("Функция недоступна", show_alert=True)
+        return
+    if callback.message and raw_report and raw_extra:
+        for part in ReportService.render_full(
+            VehicleReport.model_validate(raw_report),
+            ExtendedVehicleHistory.model_validate(raw_extra),
+        ):
+            await callback.message.answer(part, disable_web_page_preview=True)
+    elif callback.message:
+        await callback.message.answer(
+            "Дополнительная история временно недоступна. Основной отчёт продолжает работать."
         )
     await callback.answer()
 

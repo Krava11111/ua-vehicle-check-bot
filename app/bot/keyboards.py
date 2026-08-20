@@ -45,6 +45,7 @@ def main_keyboard(language: str = "uk") -> ReplyKeyboardMarkup:
 def report_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Повний звіт", callback_data="report:full")],
             [InlineKeyboardButton(text="📋 Історія", callback_data="report:history")],
             [InlineKeyboardButton(text="🛡 Перевірити страховку", callback_data="report:insurance")],
             [InlineKeyboardButton(text="🔎 Нова перевірка", callback_data="report:new")],

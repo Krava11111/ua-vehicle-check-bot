@@ -1,0 +1,44 @@
+name: Python bot CI
+
+on:
+  push:
+    branches: [main, "codex/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install project
+        run: python -m pip install -e ".[dev]"
+
+      - name: Ruff
+        run: ruff check app data_importer tests
+
+      - name: Mypy
+        run: mypy app data_importer
+
+      - name: Tests
+        run: pytest -q
+
+      - name: Validate Alembic chain and PostgreSQL DDL
+        run: |
+          alembic heads
+          alembic upgrade head --sql >/dev/null
