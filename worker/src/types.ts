@@ -83,6 +83,8 @@ export interface IndexManifest {
   version: string;
   generated_at: string;
   dataset_updated_at?: string | null;
+  data_coverage_through?: string | null;
+  update_frequency?: string | null;
   source_fingerprint: string;
   source_label: string;
   source_url: string;
@@ -218,6 +220,8 @@ export interface VehicleReportData {
     label: string;
     url: string;
     updatedAt: string | null;
+    coverageThrough?: string | null;
+    updateFrequency?: string | null;
     historyStartYear: number;
     maxEventsPerVehicle: number;
   };

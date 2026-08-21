@@ -49,7 +49,7 @@ export async function loadManifest(url: string, fetcher: typeof fetch = fetch): 
   });
   if (!response.ok) throw new Error(`Manifest request failed: ${response.status}`);
   const manifest = (await response.json()) as IndexManifest;
-  if (![2, 3, 4, 5, 6].includes(manifest.schema_version) || !manifest.archive_url_template || manifest.shard_prefix_length < 1) {
+  if (![2, 3, 4, 5, 6, 7].includes(manifest.schema_version) || !manifest.archive_url_template || manifest.shard_prefix_length < 1) {
     throw new Error("Unsupported vehicle index manifest");
   }
   if (manifest.wanted && (

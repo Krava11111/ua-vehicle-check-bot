@@ -224,6 +224,9 @@ async function sendPlateHistory(
     historyStartYear(loadedManifest, env),
     loadedManifest.source_label,
     loadedManifest.source_url,
+    loadedManifest.data_coverage_through ?? null,
+    loadedManifest.dataset_updated_at ?? null,
+    loadedManifest.update_frequency ?? "monthly",
   );
   const entries = await Promise.all(result.assignments.map(async (assignment) => ({
     reference: `${plate}.${await candidateId(assignment[0])}`,
@@ -890,6 +893,9 @@ async function handleRequest(request: Request, env: Env, context: ExecutionConte
         indexVersion: manifest.version,
         indexSchema: manifest.schema_version,
         generatedAt: manifest.generated_at,
+        datasetUpdatedAt: manifest.dataset_updated_at ?? null,
+        dataCoverageThrough: manifest.data_coverage_through ?? null,
+        updateFrequency: manifest.update_frequency ?? "monthly",
         historyStartYear: historyStartYear(manifest, env),
         plateHistoryAvailable: manifest.plate_history_available ?? manifest.schema_version >= 4,
         vehicleClustering: manifest.schema_version >= 5 ? "vin-stable-id-characteristics" : "legacy",

@@ -50,7 +50,9 @@ def test_builds_plate_and_vehicle_shards(tmp_path: Path) -> None:
     assert manifest["counts"]["vehicles"] == 1
     assert manifest["counts"]["plates"] == 2
     assert "{group}" in manifest["archive_url_template"]
-    assert manifest["schema_version"] == 6
+    assert manifest["schema_version"] == 7
+    assert manifest["data_coverage_through"] == "2024-02-17"
+    assert manifest["update_frequency"] == "monthly"
     assert manifest["history_start_year"] == 2013
     assert manifest["counts"]["plate_assignments"] == 2
     assert vehicles[vin]["e"][0][6] == "Чорний"
@@ -157,6 +159,34 @@ def test_preserves_archive_year_for_undated_plate_assignments(tmp_path: Path) ->
         "WA1VAAGEXKB009123": 2025,
         "5UXTR9C55JLC73127": 2026,
     }
+
+
+def test_parses_two_digit_official_dates_and_records_coverage(tmp_path: Path) -> None:
+    source = tmp_path / "vehicles-2026.csv"
+    source.write_text(
+        "vin,n_reg_new,d_reg,brand,model,make_year\n"
+        "5UXTR9C55JLC73127,AA1234BB,31.07.26,BMW,X3,2018\n",
+        encoding="utf-8",
+    )
+    metadata = local_metadata([source])
+    metadata["resources"][0]["year"] = 2026
+
+    output = tmp_path / "index"
+    manifest = build_index(
+        metadata,
+        output,
+        repository="example/vehicle-bot",
+        prefix_length=3,
+        max_events=50,
+    )
+
+    assert manifest["data_coverage_through"] == "2026-07-31"
+    vehicle_shard = shard_for("5UXTR9C55JLC73127", 3)
+    with zipfile.ZipFile(output / "archives" / f"index-{vehicle_shard[0]}.zip") as archive:
+        vehicles = json.loads(
+            gzip.decompress(archive.read(f"vehicles-{vehicle_shard}.json.gz"))
+        )
+    assert vehicles["5UXTR9C55JLC73127"]["e"][0][0] == "2026-07-31"
 
 
 def test_detects_csv_with_corrupted_extension(tmp_path: Path) -> None:

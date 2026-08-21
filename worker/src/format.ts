@@ -32,6 +32,17 @@ export function renderVehicle(
   if (match.candidates > 1) {
     lines.push(language === "ru" ? `\n⚠️ Возможных совпадений: ${match.candidates}` : `\n⚠️ Можливих збігів: ${match.candidates}`);
   }
+  const coverage = manifest.data_coverage_through
+    ? formatDate(manifest.data_coverage_through)
+    : null;
+  if (coverage) {
+    lines.push(
+      `📅 ${language === "ru" ? "Данные реестра по" : "Дані реєстру по"}: ${coverage} ${language === "ru" ? "включительно" : "включно"}`,
+    );
+  }
+  if ((manifest.update_frequency ?? "monthly") === "monthly") {
+    lines.push(`🔄 ${language === "ru" ? "База обновляется раз в месяц" : "База оновлюється раз на місяць"}.`);
+  }
   lines.push(
     `\n🔢 VIN: <code>${escapeHtml(vehicle.v || unknown)}</code>`,
     `🔖 ${language === "ru" ? "Номер" : "Номер"}: <code>${escapeHtml(vehicle.p || unknown)}</code>`,
@@ -83,6 +94,6 @@ export function renderVehicle(
       : "Відсутність старої події не означає відсутність реєстрації або власника.",
   );
   lines.push(`\n${language === "ru" ? "Источник" : "Джерело"}: <a href="${escapeHtml(manifest.source_url)}">${escapeHtml(manifest.source_label)}</a>`);
-  if (freshness) lines.push(`${language === "ru" ? "Обновлено источником" : "Оновлено джерелом"}: ${freshness}`);
+  if (freshness) lines.push(`🕓 ${language === "ru" ? "Последнее обновление источника" : "Останнє оновлення джерела"}: ${freshness}`);
   return lines.join("\n").slice(0, 4096);
 }

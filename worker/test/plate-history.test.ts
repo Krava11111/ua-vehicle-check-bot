@@ -16,7 +16,10 @@ test("renders multiple plate assignments with coverage and identity warnings", (
     source: "plate-history",
   };
 
-  const rendered = renderPlateHistory(result, "ru", 2013, "МВД", "https://example.com").join("\n");
+  const rendered = renderPlateHistory(
+    result, "ru", 2013, "МВД", "https://example.com",
+    "2026-07-31", "2026-08-19T06:42:47Z", "monthly",
+  ).join("\n");
 
   assert.match(rendered, /найдено автомобилей: 2/);
   assert.match(rendered, /01\.05\.2021 → 10\.01\.2024/);
@@ -25,6 +28,9 @@ test("renders multiple plate assignments with coverage and identity warnings", (
   assert.match(rendered, /Некоторые записи без VIN невозможно однозначно связать/);
   assert.match(rendered, /короткого известного периода/);
   assert.match(rendered, /примерно с 2013 года/);
+  assert.match(rendered, /Данные реестра по: 31\.07\.2026/);
+  assert.match(rendered, /База обновляется раз в месяц/);
+  assert.match(rendered, /Последнее обновление источника: 19\.08\.2026/);
 });
 
 test("marks fallback history as incomplete", () => {

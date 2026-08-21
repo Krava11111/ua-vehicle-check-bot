@@ -35,6 +35,7 @@ function report(vin: string | null = "WAUZZZ4M0FD123456"): VehicleReportData {
     },
     source: {
       label: "МВС / відкриті дані", url: "https://data.gov.ua/mvs", updatedAt: "2026-08-19",
+      coverageThrough: "2026-07-31", updateFrequency: "monthly",
       historyStartYear: 2013, maxEventsPerVehicle: 50,
     },
   };
@@ -47,6 +48,9 @@ test("basic report is one compact card with insurance and wanted but no deep VIN
   assert.match(rendered, /ОСАГО/);
   assert.match(rendered, /Совпадений в подключённом открытом реестре не найдено/);
   assert.match(rendered, /Замена номерного знака/);
+  assert.match(rendered, /Данные реестра по: 31\.07\.2026 включительно/);
+  assert.match(rendered, /База обновляется раз в месяц/);
+  assert.match(rendered, /Последнее обновление источника: 19\.08\.2026/);
   assert.equal(rendered.includes("WMI"), false);
   assert.equal(rendered.includes("VIS"), false);
   assert.equal(rendered.includes("8038900000"), false);

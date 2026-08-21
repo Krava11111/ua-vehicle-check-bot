@@ -27,7 +27,7 @@ SOURCE_PAGE = f"https://data.gov.ua/dataset/{DATASET_ID}"
 SOURCE_LABEL = "МВС України / data.gov.ua"
 WANTED_SOURCE_PAGE = f"https://data.gov.ua/dataset/{WANTED_DATASET_ID}"
 WANTED_SOURCE_LABEL = "Національна поліція України / data.gov.ua"
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 WANTED_SCHEMA_VERSION = 1
 DEFAULT_PREFIX_LENGTH = 3
 DEFAULT_MAX_EVENTS = 50
@@ -349,7 +349,7 @@ def _integer(value: str | None) -> int | None:
 def _iso_date(value: str | None) -> str | None:
     if not value:
         return None
-    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d"):
+    for fmt in ("%d.%m.%Y", "%d.%m.%y", "%Y-%m-%d", "%d/%m/%Y", "%d/%m/%y", "%Y/%m/%d"):
         try:
             return datetime.strptime(value[:10], fmt).date().isoformat()
         except ValueError:
@@ -746,6 +746,7 @@ def build_index(
     plate_writers = LruWriters(work / "plate-spool")
     rows_seen = 0
     valid_rows = 0
+    data_coverage_through: str | None = None
     try:
         downloads = work / "downloads"
         downloads.mkdir()
@@ -764,6 +765,11 @@ def build_index(
                 rows_seen += 1
                 valid_rows += 1
                 resource_rows += 1
+                if row.registration_date and (
+                    data_coverage_through is None
+                    or row.registration_date > data_coverage_through
+                ):
+                    data_coverage_through = row.registration_date
                 vehicle_writers.write(shard_for(row.key, prefix_length), row.spool_value())
                 if row.plate:
                     plate_writers.write(
@@ -843,6 +849,8 @@ def build_index(
             "version": version,
             "generated_at": datetime.now(UTC).isoformat(),
             "dataset_updated_at": metadata.get("dataset_modified"),
+            "data_coverage_through": data_coverage_through,
+            "update_frequency": "monthly",
             "source_fingerprint": metadata["source_fingerprint"],
             "source_label": SOURCE_LABEL,
             "source_url": metadata.get("source_page") or SOURCE_PAGE,

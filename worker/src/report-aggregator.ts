@@ -100,6 +100,8 @@ export class VehicleReportAggregator {
         label: manifest.source_label,
         url: manifest.source_url,
         updatedAt: manifest.dataset_updated_at ?? null,
+        coverageThrough: manifest.data_coverage_through ?? null,
+        updateFrequency: manifest.update_frequency ?? "monthly",
         historyStartYear: manifest.history_start_year ?? configuredHistoryStartYear,
         maxEventsPerVehicle: manifest.max_events_per_vehicle,
       },

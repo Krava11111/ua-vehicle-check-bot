@@ -63,6 +63,9 @@ export function renderPlateHistory(
   historyStartYear: number,
   sourceLabel: string,
   sourceUrl: string,
+  dataCoverageThrough: string | null = null,
+  datasetUpdatedAt: string | null = null,
+  updateFrequency: string | null = null,
 ): string[] {
   const lines = [
     language === "ru" ? "🔖 <b>ИСТОРИЯ НОМЕРНОГО ЗНАКА</b>" : "🔖 <b>ІСТОРІЯ НОМЕРНОГО ЗНАКА</b>",
@@ -120,7 +123,16 @@ export function renderPlateHistory(
     language === "ru"
       ? `ℹ️ <b>О данных</b>\nИстория построена по доступным регистрационным данным примерно с ${historyStartYear} года. Более ранние назначения номера могут отсутствовать. Это не полная история.`
       : `ℹ️ <b>Про дані</b>\nІсторія побудована за доступними реєстраційними даними приблизно з ${historyStartYear} року. Ранніші призначення номера можуть бути відсутні. Це не повна історія.`,
+    dataCoverageThrough
+      ? `📅 ${language === "ru" ? "Данные реестра по" : "Дані реєстру по"}: ${formatDate(dataCoverageThrough)} ${language === "ru" ? "включительно" : "включно"}`
+      : "",
+    updateFrequency === "monthly"
+      ? `🔄 ${language === "ru" ? "База обновляется раз в месяц" : "База оновлюється раз на місяць"}.`
+      : "",
+    datasetUpdatedAt
+      ? `🕓 ${language === "ru" ? "Последнее обновление источника" : "Останнє оновлення джерела"}: ${formatDate(datasetUpdatedAt.slice(0, 10))}`
+      : "",
     `<a href="${escapeHtml(sourceUrl)}">${escapeHtml(sourceLabel)}</a>`,
   );
-  return splitLines(lines);
+  return splitLines(lines.filter(Boolean));
 }

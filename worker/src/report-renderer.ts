@@ -66,6 +66,24 @@ function regionValues(data: VehicleReportData, language: Language): string[] {
     .filter((value): value is string => Boolean(value)))];
 }
 
+function sourceFreshnessLines(data: VehicleReportData, language: Language): string[] {
+  const lines: string[] = [];
+  if (data.source.coverageThrough) {
+    lines.push(
+      `📅 ${language === "ru" ? "Данные реестра по" : "Дані реєстру по"}: ${formatDate(data.source.coverageThrough)} ${language === "ru" ? "включительно" : "включно"}`,
+    );
+  }
+  if ((data.source.updateFrequency ?? "monthly") === "monthly") {
+    lines.push(`🔄 ${language === "ru" ? "База обновляется раз в месяц" : "База оновлюється раз на місяць"}.`);
+  }
+  if (data.source.updatedAt) {
+    lines.push(
+      `🕓 ${language === "ru" ? "Последнее обновление источника" : "Останнє оновлення джерела"}: ${formatDate(data.source.updatedAt)}`,
+    );
+  }
+  return lines;
+}
+
 function wantedBrief(data: VehicleReportData, language: Language): string[] {
   const checked = data.wanted.checkedAt ? `\n${language === "ru" ? "Проверено" : "Перевірено"}: ${formatDate(data.wanted.checkedAt)}` : "";
   if (data.wanted.status === "match") {
@@ -285,7 +303,7 @@ export class ReportRenderer {
     }
     lines.push(
       `${language === "ru" ? "Источник" : "Джерело"}: ${escapeHtml(data.source.label)}`,
-      data.source.updatedAt ? `${language === "ru" ? "Обновлено" : "Оновлено"}: ${formatDate(data.source.updatedAt)}` : "",
+      ...sourceFreshnessLines(data, language),
     );
     return lines.filter((line, index) => line || lines[index - 1] !== "").join("\n").slice(0, TELEGRAM_SAFE_LIMIT);
   }
@@ -536,19 +554,19 @@ export class ReportRenderer {
   }
 
   static renderSourcesSection(data: VehicleReportData, language: Language): string[] {
-    return [
-      (language === "ru" ? "ℹ️ <b>ИСТОЧНИКИ И ПОЛНОТА ДАННЫХ</b>" : "ℹ️ <b>ДЖЕРЕЛА ТА ПОВНОТА ДАНИХ</b>")
-      + `\n\n<a href="${escapeHtml(data.source.url)}">${escapeHtml(data.source.label)}</a>`
-      + (data.source.updatedAt ? `\n${language === "ru" ? "Версия источника" : "Версія джерела"}: ${formatDate(data.source.updatedAt)}` : "")
-      + `\n\n${language === "ru"
+    return [[
+      language === "ru" ? "ℹ️ <b>ИСТОЧНИКИ И ПОЛНОТА ДАННЫХ</b>" : "ℹ️ <b>ДЖЕРЕЛА ТА ПОВНОТА ДАНИХ</b>",
+      `\n<a href="${escapeHtml(data.source.url)}">${escapeHtml(data.source.label)}</a>`,
+      ...sourceFreshnessLines(data, language),
+      `\n${language === "ru"
         ? `Starcar формирует историю по подключённым источникам. Доступная регистрационная история содержит данные примерно с ${data.source.historyStartYear} года. Ранние события, номера и смены владельцев могут отсутствовать.`
-        : `Starcar формує історію за підключеними джерелами. Доступна реєстраційна історія містить дані приблизно з ${data.source.historyStartYear} року. Ранні події, номери та зміни власників можуть бути відсутні.`}`
-      + `\n\n<a href="${escapeHtml(data.wanted.sourceUrl ?? "https://data.gov.ua")}">${language === "ru" ? "Открытый реестр розыска Национальной полиции" : "Відкритий реєстр розшуку Національної поліції"}</a>`
-      + `\n<a href="${escapeHtml(data.insurance.checkUrl)}">${language === "ru" ? "Официальная проверка ОСАГО МТСБУ" : "Офіційна перевірка ОСЦПВ МТСБУ"}</a>`
-      + `\n<a href="https://auto.ria.com/uk/">AUTO.RIA</a>`
-      + `\n<a href="https://apibara.tech/">${language === "ru" ? "API истории Copart/IAAI" : "API історії Copart/IAAI"}</a>`
-      + `\n<a href="${escapeHtml(data.externalHistory?.bidfaxUrl ?? "https://bidfax.co/")}">BidFax</a>`,
-    ];
+        : `Starcar формує історію за підключеними джерелами. Доступна реєстраційна історія містить дані приблизно з ${data.source.historyStartYear} року. Ранні події, номери та зміни власників можуть бути відсутні.`}`,
+      `\n<a href="${escapeHtml(data.wanted.sourceUrl ?? "https://data.gov.ua")}">${language === "ru" ? "Открытый реестр розыска Национальной полиции" : "Відкритий реєстр розшуку Національної поліції"}</a>`,
+      `<a href="${escapeHtml(data.insurance.checkUrl)}">${language === "ru" ? "Официальная проверка ОСАГО МТСБУ" : "Офіційна перевірка ОСЦПВ МТСБУ"}</a>`,
+      `<a href="https://auto.ria.com/uk/">AUTO.RIA</a>`,
+      `<a href="https://apibara.tech/">${language === "ru" ? "API истории Copart/IAAI" : "API історії Copart/IAAI"}</a>`,
+      `<a href="${escapeHtml(data.externalHistory?.bidfaxUrl ?? "https://bidfax.co/")}">BidFax</a>`,
+    ].join("\n")];
   }
 
   static renderSection(data: VehicleReportData, section: FullReportSection, language: Language): string[] {
