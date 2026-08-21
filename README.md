@@ -9,7 +9,7 @@ Production-oriented Telegram-бот для бесплатного поиска �
 ```text
 .
 ├── alembic/
-│   ├── versions/20260819_0001_initial.py
+│   ├── versions/{20260819_0001_initial.py,20260820_0002_vehicle_external_history.py,20260820_0003_plate_history_search_type.py}
 │   └── env.py
 ├── app/
 │   ├── bot/handlers/{user.py,admin.py}
@@ -18,12 +18,19 @@ Production-oriented Telegram-бот для бесплатного поиска �
 │   ├── domain/normalization.py
 │   ├── locales/messages.py
 │   ├── repositories/vehicles.py
+│   ├── repositories/registration_events.py
 │   ├── schemas/vehicle.py
+│   ├── schemas/plate_history.py
 │   ├── services/
 │   │   ├── insurance/
+│   │   ├── marketplace_history/{base.py,schemas.py,service.py,providers/}
+│   │   ├── auction_history/{base.py,schemas.py,service.py,providers/}
+│   │   ├── vehicle_history/{odometer.py,timeline.py,cross_source.py,history_score.py,...}
 │   │   ├── payments/
 │   │   ├── access.py
 │   │   ├── analytics.py
+│   │   ├── data_coverage.py
+│   │   ├── plate_history.py
 │   │   ├── rate_limit.py
 │   │   ├── reports.py
 │   │   └── vehicles.py
@@ -225,6 +232,73 @@ GitHub Actions проверяет новую версию каждые шест�
 Реализованы `InsuranceProvider`, `MockInsuranceProvider` и `DisabledInsuranceProvider`. Реального провайдера следует добавлять только после получения официальной документации/договора, API key, правил rate limit и разрешения на автоматизацию. Новый класс должен реализовать `check_plate`, при наличии поддержки `check_vin`, и возвращать `InsuranceResult`. Никогда не преобразуйте техническую ошибку в утверждение «страховки нет».
 
 ## 9. Бесплатный режим и будущая монетизация
+
+### Дополнительная VIN-история
+
+Полный отчёт объединяет сохранённые события аукционов, историю разрешённых marketplace API,
+снимки цен/пробега, возможные несоответствия одометра, повторные появления объявлений,
+расхождения между источниками и общую timeline. Порядок получения данных: Redis → PostgreSQL →
+внешний provider. Ошибка или timeout дополнительного источника не прерывает основной отчёт МВД.
+
+AUTO.RIA подключается только через `MarketplaceProvider`. Публично документированный контракт
+поиска именно по VIN пока не зафиксирован в production-адаптере, поэтому `AutoRiaProvider` не
+угадывает endpoint и безопасно сообщает о недоступности. Для разработки есть
+`MockAutoRiaProvider`; включать его в production как источник реальных данных нельзя.
+
+Аукционный слой устроен аналогично. Реального Copart/IAAI scraper нет; доступен mock и disabled
+provider до подключения легального документированного API. Фотографии не скачиваются: в БД
+хранятся только URL оригинального источника.
+
+Новые таблицы создаёт миграция `20260820_0002`: `marketplace_listings`,
+`marketplace_listing_snapshots`, `auction_events`, `auction_photos`, `mileage_records` и
+`provider_usage_daily`. Миграция не изменяет и не удаляет существующие таблицы.
+
+Периодическое обновление уже известных активных объявлений запускается отдельным лёгким
+профилем и не индексирует площадку целиком:
+
+```bash
+docker compose --profile marketplace up -d marketplace-worker
+docker compose logs -f marketplace-worker
+```
+
+Worker включается только при `AUTO_RIA_ENABLED=true`, соблюдает
+`EXTERNAL_PROVIDER_DAILY_LIMIT` и интервал `MARKETPLACE_REFRESH_HOURS`.
+
+### Полнота регистрационной истории и история номерного знака
+
+Все автомобильные отчёты явно указывают, что показывают только доступные события подключённых
+наборов данных примерно с `VEHICLE_HISTORY_START_YEAR`. Для автомобилей старше этого периода
+выводится отдельное предупреждение; первая дата называется первым известным событием, а не
+доказанной первой регистрацией.
+
+Кнопка `🔖 История номера` отвечает на другой вопрос, чем VIN-отчёт:
+
+```text
+VIN → история конкретного автомобиля и его номеров
+номер → все автомобили, с которыми номер связан в доступных событиях
+```
+
+В варианте Cloudflare эта функция хранится в отдельном компактном
+`plate-history-{shard}.json.gz` внутри тех же GitHub Release архивов. Worker загружает HTTP Range
+только нужный shard и кеширует результат в памяти изолята на 24 часа. Поэтому для функции не
+нужны PostgreSQL, Redis, R2 или платная база Cloudflare. Пока новый индекс schema 4 ещё не
+опубликован, Worker использует совместимый поиск по существующим vehicle-shards и прямо отмечает,
+что результат может быть менее полным.
+
+`PlateHistoryService` использует существующую нормализацию номера, индекс
+`registration_events.normalized_plate`, группировку по VIN/`vehicle_id` и Redis-ключ
+`plate_history:{NORMALIZED_PLATE}`. Одна запись получает LOW confidence, несколько известных
+событий — MEDIUM, а HIGH используется только при явных операциях начала и окончания. Показанный
+интервал всегда называется известным периодом по доступным данным.
+
+После импорта индекс автомобиля и история номера инвалидируются автоматически. Управление:
+
+```dotenv
+PLATE_HISTORY_ENABLED=true
+FREE_PLATE_HISTORY=true
+PLATE_HISTORY_CACHE_TTL=86400
+VEHICLE_HISTORY_START_YEAR=2013
+```
 
 `AccessService.can_access(user, feature)` вызывается до бизнес-операции. При `PAYMENTS_ENABLED=false` работают бесплатные feature flags. При включении оплаты учитываются бесплатность функции, активная подписка и `report_balance`.
 

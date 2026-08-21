@@ -5,7 +5,15 @@ import json
 import zipfile
 from pathlib import Path
 
-from tools.build_release_index import build_index, build_wanted_index, local_metadata, shard_for
+import pytest
+
+from tools.build_release_index import (
+    build_index,
+    build_wanted_index,
+    ensure_manifest_schema_not_downgraded,
+    local_metadata,
+    shard_for,
+)
 
 
 def test_builds_plate_and_vehicle_shards(tmp_path: Path) -> None:
@@ -42,7 +50,7 @@ def test_builds_plate_and_vehicle_shards(tmp_path: Path) -> None:
     assert manifest["counts"]["vehicles"] == 1
     assert manifest["counts"]["plates"] == 2
     assert "{group}" in manifest["archive_url_template"]
-    assert manifest["schema_version"] == 5
+    assert manifest["schema_version"] == 6
     assert manifest["history_start_year"] == 2013
     assert manifest["counts"]["plate_assignments"] == 2
     assert vehicles[vin]["e"][0][6] == "Чорний"
@@ -51,6 +59,17 @@ def test_builds_plate_and_vehicle_shards(tmp_path: Path) -> None:
 def test_shards_are_stable() -> None:
     assert shard_for("AA1234BB", 3) == shard_for("AA1234BB", 3)
     assert len(shard_for("AA1234BB", 3)) == 3
+
+
+def test_manifest_schema_cannot_be_downgraded() -> None:
+    with pytest.raises(ValueError, match="schema 3 over current schema 5"):
+        ensure_manifest_schema_not_downgraded(
+            {"schema_version": 3}, {"schema_version": 5}
+        )
+
+    ensure_manifest_schema_not_downgraded(
+        {"schema_version": 5}, {"schema_version": 5}
+    )
 
 
 def test_reused_plate_does_not_merge_different_no_vin_vehicle_clusters(
@@ -101,6 +120,43 @@ def test_reused_plate_does_not_merge_different_no_vin_vehicle_clusters(
     assert etron["v"] == "WA1VAAGEXKB009123"
     assert etron["f"] == "ELECTRIC"
     assert manifest["counts"]["vehicles"] == 2
+
+
+def test_preserves_archive_year_for_undated_plate_assignments(tmp_path: Path) -> None:
+    old_source = tmp_path / "vehicles-2025.csv"
+    new_source = tmp_path / "vehicles-2026.csv"
+    header = "vin,n_reg_new,d_reg,brand,model,make_year\n"
+    old_source.write_text(
+        header + "WA1VAAGEXKB009123,AA1234BB,,AUDI,E-TRON,2019\n",
+        encoding="utf-8",
+    )
+    new_source.write_text(
+        header + "5UXTR9C55JLC73127,AA1234BB,,BMW,X3,2018\n",
+        encoding="utf-8",
+    )
+    metadata = local_metadata([old_source, new_source])
+    metadata["resources"][0]["year"] = 2025
+    metadata["resources"][1]["year"] = 2026
+
+    output = tmp_path / "index"
+    build_index(
+        metadata,
+        output,
+        repository="example/vehicle-bot",
+        prefix_length=3,
+        max_events=50,
+    )
+
+    plate_shard = shard_for("AA1234BB", 3)
+    with zipfile.ZipFile(output / "archives" / f"index-{plate_shard[0]}.zip") as archive:
+        history = json.loads(
+            gzip.decompress(archive.read(f"plate-history-{plate_shard}.json.gz"))
+        )["AA1234BB"]
+    years_by_key = {assignment[0]: assignment[11] for assignment in history}
+    assert years_by_key == {
+        "WA1VAAGEXKB009123": 2025,
+        "5UXTR9C55JLC73127": 2026,
+    }
 
 
 def test_detects_csv_with_corrupted_extension(tmp_path: Path) -> None:

@@ -15,6 +15,7 @@ export interface ProviderRefreshResult {
 
 const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/;
 const REFRESH_CACHE_ORIGIN = "https://external-provider-refresh.invalid";
+const PROVIDER_CACHE_SCHEMA = "v2-exact-auction-vin";
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -60,6 +61,15 @@ function isoDate(...values: unknown[]): string {
   return new Date().toISOString();
 }
 
+function optionalIsoDate(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value !== "string" || !value.trim()) continue;
+    const parsed = Date.parse(value);
+    if (!Number.isNaN(parsed)) return new Date(parsed).toISOString();
+  }
+  return null;
+}
+
 function normalizeVin(value: unknown): string | null {
   const normalized = text(value)?.toUpperCase().replace(/[^A-Z0-9]/g, "") ?? "";
   return VIN_RE.test(normalized) ? normalized : null;
@@ -72,7 +82,7 @@ function cacheApi(): Cache | null {
 
 function cacheRequest(vin: string, env: Env): Request {
   const configuration = `${env.AUTO_RIA_API_KEY ? "r1" : "r0"}-${env.AUCTION_API_KEY ? "a1" : "a0"}`;
-  return new Request(`${REFRESH_CACHE_ORIGIN}/vin/${vin}/${configuration}`);
+  return new Request(`${REFRESH_CACHE_ORIGIN}/${PROVIDER_CACHE_SCHEMA}/vin/${vin}/${configuration}`);
 }
 
 async function jsonResponse(response: Response, provider: string): Promise<unknown> {
@@ -155,12 +165,29 @@ function nested(root: Record<string, unknown>, key: string): Record<string, unkn
   return record(root[key]);
 }
 
-function auctionRecords(payload: unknown): Record<string, unknown>[] {
+function apiPayload(payload: unknown): Record<string, unknown> {
   const root = record(payload);
+  const response = record(root.response);
+  return Object.keys(response).length ? response : root;
+}
+
+function auctionRecords(payload: unknown): Record<string, unknown>[] {
+  const root = apiPayload(payload);
   const data = root.data;
   const dataRecord = record(data);
+  const parentVehicle = record(dataRecord.vehicle);
+  const nestedHistory = array(dataRecord.history).map(record).filter((item) => Object.keys(item).length);
+  if (nestedHistory.length) {
+    return nestedHistory.map((item) => ({
+      ...parentVehicle,
+      ...item,
+      vin: item.vin ?? parentVehicle.vin,
+      slug_vin: item.slug_vin ?? parentVehicle.slug_vin,
+      lot_number: item.lot_number ?? parentVehicle.lot_number,
+      platform: item.platform ?? parentVehicle.platform,
+    }));
+  }
   const candidates = [
-    dataRecord.history,
     root.history,
     data,
     root.results,
@@ -183,15 +210,29 @@ function auctionRecordVin(item: Record<string, unknown>): string | null {
 
 function photoUrls(item: Record<string, unknown>): string[] {
   const media = nested(item, "media");
-  const candidates = [item.photos, item.photo_urls, media.photos, media.images];
-  candidates.push(media.thumbs, media.items);
+  const candidates = [item.photos, item.photo_urls, media.photos, media.images, media.items, media.thumbs];
   for (const candidate of candidates) {
     const urls = array(candidate)
-      .map((value) => typeof value === "string" ? value : text(record(value).url, record(value).src))
-      .filter((value): value is string => Boolean(value));
-    if (urls.length) return urls.slice(0, 24);
+      .map((value) => typeof value === "string"
+        ? value
+        : text(record(value).full, record(value).large, record(value).url, record(value).src, record(value).thumb))
+      .filter((value): value is string => typeof value === "string" && /^https?:\/\//i.test(value));
+    if (urls.length) return [...new Set(urls)].slice(0, 24);
   }
   return [];
+}
+
+function mergeAuctionItems(
+  existing: Record<string, unknown>,
+  incoming: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...existing, ...incoming };
+  for (const key of ["auction", "pricing", "condition", "odometer", "location", "vehicle_specs", "sale_document", "seller", "media"]) {
+    const left = record(existing[key]);
+    const right = record(incoming[key]);
+    if (Object.keys(left).length || Object.keys(right).length) merged[key] = { ...left, ...right };
+  }
+  return merged;
 }
 
 async function shortHash(value: string): Promise<string> {
@@ -210,6 +251,7 @@ async function auctionRecord(
   const odometer = nested(item, "odometer");
   const location = nested(item, "location");
   const specs = nested(item, "vehicle_specs");
+  const engine = nested(specs, "engine");
   const saleDocument = nested(item, "sale_document");
   const platform = text(item.platform, item.auction_name, auction.platform) ?? "US auction";
   const lot = text(item.lot_number, item.lot, item.platform_id, item.id);
@@ -228,14 +270,14 @@ async function auctionRecord(
     vin,
     auctionName: platform,
     lotNumber: lot,
-    auctionDate: isoDate(auction.sale_date, auction.auction_at, auction.full_date, auction.date, item.sale_date, item.auction_date, item.ad, item.date),
+    auctionDate: optionalIsoDate(item.sale_date, item.date, item.auction_date, auction.sale_date, auction.auction_at, auction.full_date, auction.date, item.ad),
     location: text(location.display, location.name, location.city, location.send_from, item.location, item.facility),
     sellerType: text(nested(item, "seller").type, item.seller_type),
-    saleStatus: text(auction.sale_status, auction.state, auction.status, item.sale_status, item.status),
-    finalBid: number(pricing.last_sold_price, pricing.last_sold_price_usd, pricing.final_bid, item.final_bid, item.sale_price),
+    saleStatus: text(item.sale_status, item.status, auction.last_sold_status, auction.sale_status, auction.state, auction.status, auction.lot_sub_status),
+    finalBid: number(item.final_bid, item.sale_price, item.price, pricing.sale_price_usd, pricing.last_sold_price, pricing.last_sold_price_usd, pricing.final_bid),
     currency: text(pricing.currency, item.currency) ?? "USD",
-    estimatedRetailValue: number(pricing.estimated_retail_value, item.estimated_retail_value),
-    repairCost: number(condition.repair_cost, item.repair_cost),
+    estimatedRetailValue: number(pricing.estimated_retail_value, pricing.estimated_retail_value_usd, pricing.retail_value_usd, item.estimated_retail_value),
+    repairCost: number(condition.repair_cost, pricing.repair_cost_usd, item.repair_cost),
     primaryDamage: text(condition.primary_damage, item.primary_damage, item.damage),
     secondaryDamage: text(condition.secondary_damage, item.secondary_damage),
     odometer: mileage,
@@ -250,7 +292,7 @@ async function auctionRecord(
     model: text(item.model),
     year: number(item.year),
     color: text(specs.color, specs.exterior_color, item.color),
-    engineCapacity: number(specs.engine_capacity, item.engine_capacity),
+    engineCapacity: number(engine.size_l, specs.engine_capacity, item.engine_capacity),
     photoUrls: photoUrls(item),
   };
 }
@@ -259,26 +301,43 @@ export async function fetchAuctions(vin: string, env: Env): Promise<AuctionImpor
   if (!env.AUCTION_API_KEY) return [];
   const base = (env.AUCTION_API_BASE_URL ?? "https://apibara.tech/api/v1/vehicle-auction").replace(/\/$/, "");
   const headers = { Accept: "application/json", "X-API-Key": env.AUCTION_API_KEY };
-  const currentUrl = new URL(`${base}/vehicles`);
-  currentUrl.searchParams.set("s", vin);
-  currentUrl.searchParams.set("per_page", "20");
-  const [currentResponse, historyResponse] = await Promise.all([
-    fetch(currentUrl, { headers, signal: AbortSignal.timeout(12_000) }),
-    fetch(`${base}/vehicles/${encodeURIComponent(vin)}/history?per_page=20`, {
+  const detailUrl = `${base}/vehicles/${encodeURIComponent(vin)}`;
+  const historyUrl = `${detailUrl}/history?per_page=20`;
+  const [detailResponse, historyResponse] = await Promise.all([
+    fetch(detailUrl, { headers, signal: AbortSignal.timeout(12_000) }),
+    fetch(historyUrl, {
       headers,
       signal: AbortSignal.timeout(12_000),
     }),
   ]);
-  const [currentPayload, historyPayload] = await Promise.all([
-    jsonResponse(currentResponse, "auction_api_search"),
+  const [detailPayload, historyPayload] = await Promise.all([
+    jsonResponse(detailResponse, "auction_api_details"),
     jsonResponse(historyResponse, "auction_api_history"),
   ]);
-  const exact = [...auctionRecords(currentPayload), ...auctionRecords(historyPayload)]
+  const historyRecords = auctionRecords(historyPayload).sort((left, right) => {
+    const leftDate = optionalIsoDate(left.sale_date, left.date, left.auction_date) ?? "";
+    const rightDate = optionalIsoDate(right.sale_date, right.date, right.auction_date) ?? "";
+    return leftDate.localeCompare(rightDate);
+  });
+  let exact = [...auctionRecords(detailPayload), ...historyRecords]
     .filter((item) => auctionRecordVin(item) === vin);
+  if (!exact.length) {
+    const archiveSearchUrl = new URL(`${base}/vehicles`);
+    archiveSearchUrl.searchParams.set("s", vin);
+    archiveSearchUrl.searchParams.set("lot_status", "All");
+    archiveSearchUrl.searchParams.set("lot_sub_status", "Ended");
+    archiveSearchUrl.searchParams.set("per_page", "20");
+    const archivePayload = await jsonResponse(await fetch(archiveSearchUrl, {
+      headers,
+      signal: AbortSignal.timeout(12_000),
+    }), "auction_api_archive_search");
+    exact = auctionRecords(archivePayload).filter((item) => auctionRecordVin(item) === vin);
+  }
   const unique = new Map<string, Record<string, unknown>>();
   for (const item of exact) {
     const key = `${text(item.platform, item.auction_name) ?? "auction"}:${text(item.lot_number, item.platform_id, item.id) ?? JSON.stringify(item)}`;
-    unique.set(key, item);
+    const existing = unique.get(key);
+    unique.set(key, existing ? mergeAuctionItems(existing, item) : item);
   }
   return Promise.all([...unique.values()].map((item) => auctionRecord(item, vin)));
 }
@@ -319,7 +378,10 @@ export async function refreshExternalProviders(vinValue: string, env: Env): Prom
     await importHistory(payload, env);
   }
   if (cache) {
-    const ttl = Math.max(300, Number(env.HISTORY_CACHE_TTL ?? "21600"));
+    const configuredTtl = Math.max(300, Number(env.HISTORY_CACHE_TTL ?? "21600"));
+    const ttl = payload.marketplace.length || payload.auctions.length
+      ? configuredTtl
+      : Math.min(configuredTtl, 900);
     await cache.put(request, Response.json(status, {
       headers: { "Cache-Control": `public, max-age=${ttl}` },
     }));

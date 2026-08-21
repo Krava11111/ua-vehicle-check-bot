@@ -139,6 +139,9 @@ jobs:
       - name: Publish current manifest last
         if: steps.vehicle_check.outputs.changed == 'true' || steps.wanted_check.outputs.changed == 'true'
         run: |
+          python tools/build_release_index.py guard-publish \
+            --candidate release-index/publish/manifest.json \
+            --current .index-work/current/manifest.json
           if ! gh release view vehicle-data-current >/dev/null 2>&1; then
             gh release create vehicle-data-current \
               --title "Current vehicle index manifest" \

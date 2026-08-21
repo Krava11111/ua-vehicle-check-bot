@@ -44,7 +44,7 @@ def analyze_history(events: list[RegistrationEvent], settings: Settings) -> Hist
     if len(plates) >= settings.frequent_plate_change_count:
         warnings.append("⚠️ Частая смена регистрационных номеров")
     if not dates or dates[0].year > settings.history_coverage_start_year:
-        warnings.append("ℹ️ История может быть неполной")
+        warnings.append("ℹ️ Доступная история по подключённым источникам может быть неполной")
 
     return HistoryAnalytics(
         first_registration=dates[0] if dates else None,

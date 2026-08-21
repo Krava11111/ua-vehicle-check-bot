@@ -49,7 +49,7 @@ export async function loadManifest(url: string, fetcher: typeof fetch = fetch): 
   });
   if (!response.ok) throw new Error(`Manifest request failed: ${response.status}`);
   const manifest = (await response.json()) as IndexManifest;
-  if (![2, 3, 4, 5].includes(manifest.schema_version) || !manifest.archive_url_template || manifest.shard_prefix_length < 1) {
+  if (![2, 3, 4, 5, 6].includes(manifest.schema_version) || !manifest.archive_url_template || manifest.shard_prefix_length < 1) {
     throw new Error("Unsupported vehicle index manifest");
   }
   if (manifest.wanted && (
@@ -237,15 +237,26 @@ export function orderVehicleKeysByLatestPlateUse(
   keys: string[],
   assignments: CompactPlateAssignment[],
 ): string[] {
-  const latestByKey = new Map<string, string>();
+  const latestByKey = new Map<string, readonly [number, number, string]>();
+  const recency = (assignment: CompactPlateAssignment): readonly [number, number, string] => {
+    const date = assignment[8] ?? assignment[7] ?? "";
+    const dateYear = date ? Number(date.slice(0, 4)) || 0 : 0;
+    return [dateYear || assignment[11] || 0, date ? 1 : 0, date];
+  };
+  const compareRecency = (
+    left: readonly [number, number, string],
+    right: readonly [number, number, string],
+  ): number => left[0] - right[0] || left[1] - right[1] || left[2].localeCompare(right[2]);
   for (const assignment of assignments) {
     const key = assignment[0];
-    const date = assignment[8] ?? assignment[7] ?? "";
-    if (date > (latestByKey.get(key) ?? "")) latestByKey.set(key, date);
+    const value = recency(assignment);
+    const current = latestByKey.get(key);
+    if (!current || compareRecency(value, current) > 0) latestByKey.set(key, value);
   }
   return [...keys].sort((left, right) => {
-    const dateOrder = (latestByKey.get(right) ?? "").localeCompare(latestByKey.get(left) ?? "");
-    return dateOrder || left.localeCompare(right);
+    const empty: readonly [number, number, string] = [0, 0, ""];
+    const recencyOrder = compareRecency(latestByKey.get(right) ?? empty, latestByKey.get(left) ?? empty);
+    return recencyOrder || left.localeCompare(right);
   });
 }
 

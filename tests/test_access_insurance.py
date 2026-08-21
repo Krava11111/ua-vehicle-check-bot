@@ -23,6 +23,13 @@ def test_access_free_mode() -> None:
     assert access.can_access(user(), Feature.PLATE)
     assert access.can_access(user(), Feature.VIN)
     assert access.can_access(user(), Feature.HISTORY)
+    assert access.can_access(user(), Feature.AUCTION_HISTORY)
+    assert access.can_access(user(), Feature.AUCTION_PHOTOS)
+    assert access.can_access(user(), Feature.MARKETPLACE_HISTORY)
+    assert access.can_access(user(), Feature.ODOMETER_HISTORY)
+    assert access.can_access(user(), Feature.FULL_REPORT)
+    assert access.can_access(user(), Feature.FULL_TIMELINE)
+    assert access.can_access(user(), Feature.HISTORY_SCORE)
 
 
 def test_access_paid_mode() -> None:

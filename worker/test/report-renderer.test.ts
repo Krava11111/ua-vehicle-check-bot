@@ -67,6 +67,14 @@ test("candidate selector separates Q7 and E-Tron", () => {
   assert.match(rendered, /ELECTRIC/);
 });
 
+test("plate lookup asks whether the historical VIN is still current", () => {
+  const value = report("WVWZZZ3CZHE123456");
+  const rendered = ReportRenderer.renderVinConfirmation(value.match, "AA1234BB", "ru");
+  assert.match(rendered, /исторический VIN/);
+  assert.match(rendered, /WVWZZZ3CZHE123456/);
+  assert.match(rendered, /сейчас актуально/);
+});
+
 test("no-VIN characteristic differences are not stated as confirmed changes", () => {
   const value = report(null);
   value.match.vehicle.e[1]![7] = "ELECTRIC";
@@ -121,6 +129,11 @@ test("external sections render connected AUTO.RIA and Copart history", () => {
       historyScore: 90, scoreFactors: ["аукціонна подія"],
     },
   };
+  const auctionCaption = ReportRenderer.renderAuctionPhotoCaption(value.externalHistory.data!.auctions[0]!, "ru");
+  assert.match(auctionCaption, /Дата продажи/);
+  assert.match(auctionCaption, /Основное повреждение: Front End/);
+  assert.match(auctionCaption, /Финальная ставка/);
+  assert.match(auctionCaption, /98[\s ]170 км/);
   assert.match(ReportRenderer.renderExternalSection(value, "auctions", "ru").join("\n"), /Copart/);
   assert.match(ReportRenderer.renderExternalSection(value, "auctions", "ru").join("\n"), /Front End/);
   assert.match(ReportRenderer.renderExternalSection(value, "marketplace", "ru").join("\n"), /19\s500 USD/);

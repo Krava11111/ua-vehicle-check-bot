@@ -64,6 +64,19 @@ services:
       - dataset_data:/data
     security_opt: ["no-new-privileges:true"]
 
+  marketplace-worker:
+    build: .
+    env_file: .env
+    entrypoint: ["python", "-m", "app.marketplace_worker"]
+    profiles: ["marketplace"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+
 volumes:
   postgres_data:
   redis_data:

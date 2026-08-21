@@ -48,6 +48,7 @@ export async function buildVehicleCandidates(matches: VehicleMatch[], queriedPla
       lastSeenAt: dates.at(-1) ?? null,
       registrationsCount: relevantEvents.length,
       confidence: match.vehicle.v ? "HIGH" : match.key.startsWith("F:") || match.key.startsWith("S:") ? "MEDIUM" : "LOW",
+      sourceArchiveYear: match.vehicle.sy ?? null,
     };
   }));
 }

@@ -17,6 +17,12 @@ AUTO_RIA_SEARCH_URL = "https://developers.ria.com/auto/search"
 AUTO_RIA_INFO_URL = "https://developers.ria.com/auto/info"
 AUCTION_API_BASE_URL = "https://apibara.tech/api/v1/vehicle-auction"
 BIDFAX_BASE_URL = "https://bidfax.co/"
+WELCOME_IMAGE_URL = "https://ua-vehicle-check-bot.ukraine-vehicle-telegram-worker.workers.dev/welcome.png"
+
+[[rules]]
+type = "Data"
+globs = ["**/*.png"]
+fallthrough = true
 
 [[d1_databases]]
 binding = "HISTORY_DB"

@@ -93,6 +93,22 @@ test("orders reused-plate vehicles by the latest known assignment", () => {
   );
 });
 
+test("falls back to source archive year when registration dates are absent", () => {
+  const assignments: CompactPlateAssignment[] = [
+    ["archive-2025", null, "BMW", "X3", 2018, null, null, null, null, 1, "LOW", 2025],
+    ["dated-2026", null, "AUDI", "Q7", 2020, null, null, "2026-03-01", "2026-03-01", 1, "LOW", 2026],
+    ["archive-2026", null, "TESLA", "MODEL 3", 2021, null, null, null, null, 1, "LOW", 2026],
+    ["archive-2024", null, "SKODA", "OCTAVIA", 2019, null, null, null, null, 1, "LOW", 2024],
+  ];
+  assert.deepEqual(
+    orderVehicleKeysByLatestPlateUse(
+      ["archive-2024", "archive-2025", "archive-2026", "dated-2026"],
+      assignments,
+    ),
+    ["dated-2026", "archive-2026", "archive-2025", "archive-2024"],
+  );
+});
+
 test("range-reads wanted records by VIN", async () => {
   clearCachesForTests();
   const vin = "WVWZZZ3CZHE123456";

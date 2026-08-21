@@ -8,10 +8,12 @@ import {
   RegistrationOperationFormatter,
 } from "./presentation.js";
 import type {
+  AuctionHistoryEvent,
   CompactEvent,
   FullReportSection,
   Language,
   VehicleCandidate,
+  VehicleMatch,
   VehicleReportData,
 } from "./types.js";
 
@@ -146,6 +148,50 @@ function vinRegion(vin: string, language: Language): string {
 }
 
 export class ReportRenderer {
+  static renderAuctionPhotoCaption(event: AuctionHistoryEvent, language: Language): string {
+    const ru = language === "ru";
+    const sold = /sold|продан/i.test(event.saleStatus ?? "");
+    const lines = [
+      `🇺🇸 <b>${escapeHtml(event.auctionName ?? event.provider)}</b>`,
+      event.lotNumber ? `${ru ? "Лот" : "Лот"}: <code>${escapeHtml(event.lotNumber)}</code>` : null,
+      event.auctionDate
+        ? `${sold ? (ru ? "Дата продажи" : "Дата продажу") : (ru ? "Дата аукциона" : "Дата аукціону")}: ${formatDate(event.auctionDate)}`
+        : null,
+      event.saleStatus ? `${ru ? "Статус" : "Статус"}: ${escapeHtml(event.saleStatus)}` : null,
+      event.primaryDamage ? `💥 ${ru ? "Основное повреждение" : "Основне пошкодження"}: ${escapeHtml(event.primaryDamage)}` : null,
+      event.secondaryDamage ? `💥 ${ru ? "Дополнительное" : "Додаткове"}: ${escapeHtml(event.secondaryDamage)}` : null,
+      event.odometer !== null ? `📊 ${ru ? "Пробег" : "Пробіг"}: ${formatMileage(event.odometer, event.odometerUnit, event.normalizedOdometerKm)}` : null,
+      event.finalBid !== null ? `💵 ${ru ? "Финальная ставка" : "Фінальна ставка"}: ${formatMoney(event.finalBid, event.currency)}` : null,
+      event.titleType ? `📄 ${ru ? "Документ" : "Документ"}: ${escapeHtml(event.titleType)}` : null,
+      event.keysAvailable !== null ? `🔑 ${ru ? "Ключи" : "Ключі"}: ${event.keysAvailable ? (ru ? "есть" : "є") : (ru ? "нет" : "немає")}` : null,
+      event.runAndDrive !== null ? `🚗 Run & Drive: ${event.runAndDrive ? (ru ? "да" : "так") : (ru ? "нет" : "ні")}` : null,
+    ].filter((line): line is string => Boolean(line));
+    return lines.join("\n").slice(0, 1_000);
+  }
+
+  static renderVinConfirmation(match: VehicleMatch, plate: string, language: Language): string {
+    const vehicle = match.vehicle;
+    const vehicleTitle = [vehicle.b, vehicle.m].filter(Boolean).map(escapeHtml).join(" ") || unknown(language);
+    const details = [vehicle.y, vehicle.c, vehicle.f].filter(Boolean).map(escapeHtml).join(" · ");
+    return [
+      language === "ru"
+        ? `🔎 <b>По номеру <code>${escapeHtml(plate)}</code> найден исторический VIN</b>`
+        : `🔎 <b>За номером <code>${escapeHtml(plate)}</code> знайдено історичний VIN</b>`,
+      "",
+      `🚘 <b>${vehicleTitle}</b>`,
+      details || unknown(language),
+      `🔢 VIN: <code>${escapeHtml(vehicle.v ?? "")}</code>`,
+      "",
+      language === "ru"
+        ? "⚠️ Номера могут переноситься на другие автомобили, а в новых открытых данных МВД связь с актуальным номером может отсутствовать."
+        : "⚠️ Номери можуть переноситися на інші автомобілі, а в нових відкритих даних МВС зв’язок з актуальним номером може бути відсутній.",
+      "",
+      language === "ru"
+        ? "Это транспортное средство сейчас актуально для проверки?"
+        : "Цей транспортний засіб зараз актуальний для перевірки?",
+    ].join("\n");
+  }
+
   static renderCandidateSelector(
     plate: string,
     candidates: VehicleCandidate[],
@@ -168,7 +214,11 @@ export class ReportRenderer {
         `\n${index + 1}️⃣ <b>${vehicleTitle}</b>`,
         details || unknown(language),
         candidate.vin ? `VIN: <code>${escapeHtml(candidate.vin)}</code>` : (language === "ru" ? "VIN: нет в доступных данных" : "VIN: немає у доступних даних"),
-        `${language === "ru" ? "Последняя известная запись этого номера" : "Останній відомий запис цього номера"}: ${formatDate(candidate.lastSeenAt)}`,
+        candidate.lastSeenAt
+          ? `${language === "ru" ? "Последняя известная запись этого номера" : "Останній відомий запис цього номера"}: ${formatDate(candidate.lastSeenAt)}`
+          : candidate.sourceArchiveYear
+            ? `${language === "ru" ? "Дата операции отсутствует; архив источника" : "Дата операції відсутня; архів джерела"}: ${candidate.sourceArchiveYear}`
+            : `${language === "ru" ? "Последняя известная запись этого номера" : "Останній відомий запис цього номера"}: —`,
       );
     });
     lines.push(language === "ru"
@@ -389,7 +439,9 @@ export class ReportRenderer {
         if (event.photos[0]) lines.push(`📸 <a href="${escapeHtml(event.photos[0])}">${ru ? "Фото источника" : "Фото джерела"}</a>`);
         if (event.sourceUrl) lines.push(`🔗 <a href="${escapeHtml(event.sourceUrl)}">${ru ? "Карточка лота" : "Картка лота"}</a>`);
       }
-      if (data.match.vehicle.v) lines.push("", ru ? "🔎 Для дополнительной ручной проверки используйте кнопки Copart и BidFax." : "🔎 Для додаткової ручної перевірки скористайтеся кнопками Copart і BidFax.");
+      if (data.match.vehicle.v) lines.push("", ru
+        ? "🔎 Дополнительный поиск точного VIN доступен по кнопкам PLC.ua, все аукционы, Copart и BidFax. Результаты Google не являются подтверждённым совпадением Starcar."
+        : "🔎 Додатковий пошук точного VIN доступний за кнопками PLC.ua, усі аукціони, Copart і BidFax. Результати Google не є підтвердженим збігом Starcar.");
     } else if (section === "marketplace") {
       lines.push(ru ? "🇺🇦 <b>ИСТОРИЯ ОБЪЯВЛЕНИЙ AUTO.RIA</b>" : "🇺🇦 <b>ІСТОРІЯ ОГОЛОШЕНЬ AUTO.RIA</b>");
       if (data.externalHistory?.marketplace === "not_connected") lines.push(ru ? "⚪ API AUTO.RIA ещё не настроен." : "⚪ API AUTO.RIA ще не налаштовано.");

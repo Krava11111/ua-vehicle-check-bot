@@ -19,6 +19,7 @@ export interface Env {
   AUCTION_API_KEY?: string;
   AUCTION_API_BASE_URL?: string;
   BIDFAX_BASE_URL?: string;
+  WELCOME_IMAGE_URL?: string;
 }
 
 export interface D1ResultLike<T = Record<string, unknown>> {
@@ -164,6 +165,7 @@ export interface CompactVehicle {
   ec: number | null;
   ow: number | null;
   tw: number | null;
+  sy?: number | null;
   e: CompactEvent[];
 }
 
@@ -191,6 +193,7 @@ export interface VehicleCandidate {
   lastSeenAt: string | null;
   registrationsCount: number;
   confidence: AssignmentConfidence;
+  sourceArchiveYear?: number | null;
 }
 
 export interface VehicleReportData {
@@ -248,6 +251,7 @@ export type CompactPlateAssignment = [
   string | null,
   number,
   AssignmentConfidence,
+  (number | null)?,
 ];
 
 export interface PlateHistoryResult {
@@ -256,6 +260,19 @@ export interface PlateHistoryResult {
   totalAssignments: number;
   truncated: boolean;
   source: "plate-history" | "vehicle-fallback";
+}
+
+export interface UserReportHistoryItem {
+  id: number;
+  reportReference: string;
+  vehicleKey: string;
+  vin: string | null;
+  plate: string | null;
+  brand: string | null;
+  model: string | null;
+  year: number | null;
+  lastViewedAt: string;
+  viewCount: number;
 }
 
 export type Confidence = "HIGH" | "MEDIUM" | "LOW";
