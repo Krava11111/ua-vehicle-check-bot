@@ -170,6 +170,11 @@ export function fullReportKeyboard(language: Language, reference: string): Recor
   };
 }
 
+function googleVinSearchUrl(vin: string, sites: string[]): string {
+  const siteFilter = sites.map((site) => `site:${site}`).join(" OR ");
+  return `https://www.google.com/search?q=${encodeURIComponent(`"${vin}" (${siteFilter})`)}`;
+}
+
 export function sectionKeyboard(
   language: Language,
   reference: string,
@@ -189,6 +194,22 @@ export function sectionKeyboard(
       text: language === "ru" ? "📋 Скопировать VIN" : "📋 Скопіювати VIN",
       copy_text: { text: vin },
     }]);
+    rows.push([
+      {
+        text: "🔎 PLC.ua",
+        url: googleVinSearchUrl(vin, ["plc.ua/auctions/lot"]),
+      },
+      {
+        text: language === "ru" ? "🌐 Все аукционы" : "🌐 Усі аукціони",
+        url: googleVinSearchUrl(vin, [
+          "plc.ua/auctions/lot",
+          "copart.com",
+          "iaai.com",
+          "bidfax.info",
+          "bidfax.co",
+        ]),
+      },
+    ]);
     rows.push([
       {
         text: "🇺🇸 Copart",
