@@ -36,15 +36,22 @@ function formatMileage(value: number | null, unit: string | null, km: number | n
     : original;
 }
 
-function externalStatus(
+function externalOverviewStatus(
+  label: string,
   status: VehicleReportData["externalHistory"]["auctions"] | undefined,
   count: number,
   language: Language,
 ): string {
-  if (status === "available") return language === "ru" ? `найдено ${count}` : `знайдено ${count}`;
-  if (status === "empty") return language === "ru" ? "совпадений нет" : "збігів немає";
-  if (status === "unavailable") return language === "ru" ? "временно недоступно" : "тимчасово недоступно";
-  return language === "ru" ? "API не настроен" : "API не налаштовано";
+  if (status === "available" && count > 0) {
+    return `✅ ${label}: ${language === "ru" ? `найдено ${count}` : `знайдено ${count}`}`;
+  }
+  if (status === "empty" || (status === "available" && count === 0)) {
+    return `⚪ ${label}: ${language === "ru" ? "данных не найдено" : "даних не знайдено"}`;
+  }
+  if (status === "unavailable") {
+    return `⚪ ${label}: ${language === "ru" ? "временно недоступно" : "тимчасово недоступно"}`;
+  }
+  return `⚪ ${label}: ${language === "ru" ? "источник не подключён" : "джерело не підключено"}`;
 }
 
 function title(data: VehicleReportData): string {
@@ -64,6 +71,54 @@ function regionValues(data: VehicleReportData, language: Language): string[] {
   return [...new Set((data.match.vehicle.e ?? [])
     .map((event) => RegionResolver.resolve(event[4], language))
     .filter((value): value is string => Boolean(value)))];
+}
+
+function latestRegion(data: VehicleReportData, language: Language): string | null {
+  for (const event of [...orderedEvents(data.match.vehicle.e ?? [])].reverse()) {
+    const region = RegionResolver.resolve(event[4], language);
+    if (region) return region;
+  }
+  return null;
+}
+
+function characteristicDifferences(data: VehicleReportData, language: Language): string[] {
+  const fields: Array<{ labelRu: string; labelUk: string; index: number; suffix?: string }> = [
+    { labelRu: "Цвет", labelUk: "Колір", index: 6 },
+    { labelRu: "Топливо", labelUk: "Паливо", index: 7 },
+    { labelRu: "Двигатель", labelUk: "Двигун", index: 8, suffix: " см³" },
+    { labelRu: "Кузов", labelUk: "Кузов", index: 9 },
+    { labelRu: "Назначение", labelUk: "Призначення", index: 10 },
+    { labelRu: "Тип ТС", labelUk: "Тип ТЗ", index: 13 },
+  ];
+  const differences: string[] = [];
+  for (const field of fields) {
+    const values: string[] = [];
+    for (const event of orderedEvents(data.match.vehicle.e ?? [])) {
+      const raw = event[field.index];
+      if (raw === null || raw === undefined) continue;
+      const value = `${raw}${field.suffix ?? ""}`;
+      if (values.at(-1) !== value) values.push(value);
+    }
+    if (new Set(values).size > 1) {
+      differences.push(
+        `${language === "ru" ? field.labelRu : field.labelUk}: ${values.map(escapeHtml).join(" → ")}`,
+      );
+    }
+  }
+  return differences;
+}
+
+function calculatedHistoryScore(
+  data: VehicleReportData,
+  language: Language,
+  differenceCount = characteristicDifferences(data, language).length,
+): number {
+  let score = data.externalHistory?.data?.historyScore ?? 100;
+  if (!data.match.vehicle.v) score -= 10;
+  if (data.wanted.status === "match") score -= 50;
+  score -= Math.min(20, Math.max(0, ownerCount(data, language) - 2) * 5);
+  if (differenceCount && data.match.vehicle.v) score -= Math.min(15, differenceCount * 5);
+  return Math.max(0, score);
 }
 
 function sourceFreshnessLines(data: VehicleReportData, language: Language): string[] {
@@ -308,27 +363,51 @@ export class ReportRenderer {
     return lines.filter((line, index) => line || lines[index - 1] !== "").join("\n").slice(0, TELEGRAM_SAFE_LIMIT);
   }
 
-  static renderFullReportSummary(data: VehicleReportData, language: Language): string {
+  static renderFullReportSummary(
+    data: VehicleReportData,
+    language: Language,
+    showSectionPrompt = true,
+  ): string {
     const vehicle = data.match.vehicle;
+    const events = orderedEvents(vehicle.e ?? []);
+    const firstEvent = events.find((event) => event[0]);
+    const imported = importedEvent(events, language);
+    const region = latestRegion(data, language);
+    const ownershipPeriods = events.length ? ownerCount(data, language) + 1 : 0;
+    const auctionCount = data.externalHistory?.data?.auctions.length ?? 0;
+    const marketplaceCount = data.externalHistory?.data?.marketplace.length ?? 0;
+    const mileageCount = data.externalHistory?.data?.mileage.length ?? 0;
     const lines = [
-      language === "ru" ? "📊 <b>ПОЛНЫЙ ОТЧЁТ</b>" : "📊 <b>ПОВНИЙ ЗВІТ</b>",
-      `\n🚘 ${title(data)} · ${vehicle.y ?? unknown(language)}`,
-      vehicle.p ? `🔖 <code>${escapeHtml(vehicle.p)}</code>` : "",
-      vehicle.v ? `🔢 <code>${escapeHtml(vehicle.v)}</code>` : "",
-      `\n📋 ${language === "ru" ? "Регистраций" : "Реєстрацій"}: ${vehicle.e?.length ?? 0}`,
-      `👥 ${language === "ru" ? "Известных смен владельца" : "Відомих змін власника"}: ${ownerCount(data, language)}`,
-      `🔖 ${language === "ru" ? "Известных номеров" : "Відомих номерів"}: ${plateCount(data)}`,
-      `📍 ${language === "ru" ? "Регионов" : "Регіонів"}: ${regionValues(data, language).length}`,
-      `\n🛡 ${language === "ru" ? "ОСАГО: статус не проверен" : "ОСЦПВ: статус не перевірено"}`,
+      "📊 <b>STARCAR · " + (language === "ru" ? "ОТЧЁТ" : "ЗВІТ") + "</b>",
+      "━━━━━━━━━━━━━━━━━━",
+      `🚘 <b>${title(data)} · ${vehicle.y ?? unknown(language)}</b>`,
+      vehicle.p ? `🔖 ${language === "ru" ? "Номер" : "Номер"}: <code>${escapeHtml(vehicle.p)}</code>` : "",
+      vehicle.v ? `🔢 VIN: <code>${escapeHtml(vehicle.v)}</code>` : "",
+      `\n📌 <b>${language === "ru" ? "КОРОТКО ОБ АВТО" : "КОРОТКО ПРО АВТО"}</b>`,
+      `• ${language === "ru" ? "Регистрационных событий" : "Реєстраційних подій"}: ${events.length}`,
+      `• ${language === "ru" ? "Периодов владения" : "Періодів володіння"}: ${ownershipPeriods}`,
+      `• ${language === "ru" ? "Известных номеров" : "Відомих номерів"}: ${plateCount(data)}`,
+      `• ${language === "ru" ? "Первое известное событие" : "Перша відома подія"}: ${formatDate(firstEvent?.[0])}`,
+      region ? `• ${language === "ru" ? "Последний известный регион" : "Останній відомий регіон"}: ${escapeHtml(region)}` : "",
+      `\n🛡 <b>${language === "ru" ? "ПРОВЕРКИ" : "ПЕРЕВІРКИ"}</b>`,
       data.wanted.status === "clear"
-        ? (language === "ru" ? "🚨 Розыск: совпадений в открытом реестре нет" : "🚨 Розшук: збігів у відкритому реєстрі немає")
+        ? (language === "ru" ? "✅ Розыск: совпадений не найдено" : "✅ Розшук: збігів не знайдено")
         : data.wanted.status === "match"
           ? (language === "ru" ? `🚨 Розыск: найдено совпадений — ${data.wanted.matches.length}` : `🚨 Розшук: знайдено збігів — ${data.wanted.matches.length}`)
-          : (language === "ru" ? "🚨 Розыск: проверка недоступна" : "🚨 Розшук: перевірка недоступна"),
-      `\n🇺🇸 ${language === "ru" ? "Аукционы" : "Аукціони"}: ${externalStatus(data.externalHistory?.auctions, data.externalHistory?.data?.auctions.length ?? 0, language)}`,
-      `🇺🇦 ${language === "ru" ? "Объявления" : "Оголошення"}: ${externalStatus(data.externalHistory?.marketplace, data.externalHistory?.data?.marketplace.length ?? 0, language)}`,
-      `📊 ${language === "ru" ? "Пробег" : "Пробіг"}: ${externalStatus(data.externalHistory?.odometer, data.externalHistory?.data?.mileage.length ?? 0, language)}`,
-      language === "ru" ? "\nВыберите раздел:" : "\nОберіть розділ:",
+          : (language === "ru" ? "⚪ Розыск: проверка недоступна" : "⚪ Розшук: перевірка недоступна"),
+      language === "ru" ? "⚪ ОСАГО: проверить на сайте МТСБУ" : "⚪ ОСЦПВ: перевірити на сайті МТСБУ",
+      externalOverviewStatus(language === "ru" ? "Аукционы США" : "Аукціони США", data.externalHistory?.auctions, auctionCount, language),
+      externalOverviewStatus("AUTO.RIA", data.externalHistory?.marketplace, marketplaceCount, language),
+      externalOverviewStatus(language === "ru" ? "Пробег" : "Пробіг", data.externalHistory?.odometer, mileageCount, language),
+      imported ? `\n🌍 <b>${language === "ru" ? "ИМПОРТ" : "ІМПОРТ"}</b>` : "",
+      imported
+        ? `${language === "ru" ? "Первое известное событие с признаком ввоза" : "Перша відома подія з ознакою ввезення"}: ${formatDate(imported[0])}`
+        : "",
+      `\n📈 <b>${language === "ru" ? "Индекс истории Starcar" : "Індекс історії Starcar"}: ${calculatedHistoryScore(data, language)}/100</b>`,
+      language === "ru"
+        ? "<i>Информационная оценка, не официальный вывод.</i>"
+        : "<i>Інформаційна оцінка, не офіційний висновок.</i>",
+      showSectionPrompt ? (language === "ru" ? "\nВыберите раздел 👇" : "\nОберіть розділ 👇") : "",
     ];
     return lines.filter(Boolean).join("\n").slice(0, TELEGRAM_SAFE_LIMIT);
   }
@@ -484,26 +563,7 @@ export class ReportRenderer {
 
   static renderAnalyticsSection(data: VehicleReportData, language: Language): string[] {
     const vehicle = data.match.vehicle;
-    const events = orderedEvents(vehicle.e ?? []);
-    const fields: Array<{ labelRu: string; labelUk: string; index: number; suffix?: string }> = [
-      { labelRu: "Цвет", labelUk: "Колір", index: 6 },
-      { labelRu: "Топливо", labelUk: "Паливо", index: 7 },
-      { labelRu: "Двигатель", labelUk: "Двигун", index: 8, suffix: " см³" },
-      { labelRu: "Кузов", labelUk: "Кузов", index: 9 },
-      { labelRu: "Назначение", labelUk: "Призначення", index: 10 },
-      { labelRu: "Тип ТС", labelUk: "Тип ТЗ", index: 13 },
-    ];
-    const differences: string[] = [];
-    for (const field of fields) {
-      const values: string[] = [];
-      for (const event of events) {
-        const raw = event[field.index];
-        if (raw === null || raw === undefined) continue;
-        const value = `${raw}${field.suffix ?? ""}`;
-        if (values.at(-1) !== value) values.push(value);
-      }
-      if (new Set(values).size > 1) differences.push(`${language === "ru" ? field.labelRu : field.labelUk}: ${values.map(escapeHtml).join(" → ")}`);
-    }
+    const differences = characteristicDifferences(data, language);
     const lines = [language === "ru" ? "⚠️ <b>АНАЛИТИКА</b>" : "⚠️ <b>АНАЛІТИКА</b>"];
     if (differences.length && vehicle.v) {
       lines.push(language === "ru" ? "Различия внутри событий одного VIN:" : "Відмінності всередині подій одного VIN:", ...differences);
@@ -521,14 +581,9 @@ export class ReportRenderer {
     if (data.externalHistory?.data?.odometerWarnings.length) {
       lines.push("", language === "ru" ? "🔴 Обнаружены возможные несоответствия пробега." : "🔴 Виявлено можливі невідповідності пробігу.");
     }
-    lines.push("", ...wantedBrief(data, language));
-    let score = data.externalHistory?.data?.historyScore ?? 100;
-    if (!vehicle.v) score -= 10;
-    if (data.wanted.status === "match") score -= 50;
-    score -= Math.min(20, Math.max(0, ownerCount(data, language) - 2) * 5);
-    if (differences.length && vehicle.v) score -= Math.min(15, differences.length * 5);
+    const score = calculatedHistoryScore(data, language, differences.length);
     lines.push(
-      `\n📈 <b>${language === "ru" ? "Аналитический индекс истории" : "Аналітичний індекс історії"}: ${Math.max(0, score)}/100</b>`,
+      `\n📈 <b>${language === "ru" ? "Аналитический индекс истории" : "Аналітичний індекс історії"}: ${score}/100</b>`,
       language === "ru"
         ? "Индекс является автоматической аналитикой Starcar и не является техническим заключением."
         : "Індекс є автоматичною аналітикою Starcar і не є технічним висновком.",
@@ -587,18 +642,17 @@ export class ReportRenderer {
   }
 
   static renderAll(data: VehicleReportData, language: Language): string[] {
+    const external = data.externalHistory?.data;
     const blocks = [
-      this.renderFullReportSummary(data, language),
+      this.renderFullReportSummary(data, language, false),
       ...this.renderRegistrationsSection(data, language),
       ...this.renderOwnershipSection(data, language),
       ...this.renderVehiclePlatesSection(data, language),
       ...this.renderVinSection(data, language),
       ...this.renderImportSection(data, language),
-      ...this.renderInsuranceSection(data, language),
-      ...wantedBrief(data, language),
-      ...this.renderExternalSection(data, "auctions", language),
-      ...this.renderExternalSection(data, "marketplace", language),
-      ...this.renderExternalSection(data, "odometer", language),
+      ...(external?.auctions.length ? this.renderExternalSection(data, "auctions", language) : []),
+      ...(external?.marketplace.length ? this.renderExternalSection(data, "marketplace", language) : []),
+      ...(external?.mileage.length ? this.renderExternalSection(data, "odometer", language) : []),
       ...this.renderAnalyticsSection(data, language),
       ...this.renderTimelineSection(data, language),
       ...this.renderSourcesSection(data, language),

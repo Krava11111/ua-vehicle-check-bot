@@ -42,8 +42,12 @@ test("main keyboard includes insurance search", () => {
 });
 
 test("full report replaces the generic USA button with auctions", () => {
-  assert.match(JSON.stringify(fullReportKeyboard("ru", "AA1234BB.abcdef123456")), /Аукционы/);
-  assert.match(JSON.stringify(fullReportKeyboard("uk", "AA1234BB.abcdef123456")), /Аукціони/);
+  const ru = JSON.stringify(fullReportKeyboard("ru", "AA1234BB.abcdef123456"));
+  const uk = JSON.stringify(fullReportKeyboard("uk", "AA1234BB.abcdef123456"));
+  assert.match(ru, /Аукционы/);
+  assert.match(uk, /Аукціони/);
+  assert.match(ru, /Показать весь отчёт/);
+  assert.match(uk, /Показати весь звіт/);
 });
 
 test("first launch offers Ukrainian and Russian language callbacks", () => {
