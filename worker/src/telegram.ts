@@ -244,7 +244,7 @@ export function fullReportKeyboard(language: Language, reference: string): Recor
         { text: label("📅 Хронология", "📅 Хронологія"), callback_data: `sec:timeline:${reference}` },
         { text: label("ℹ️ Источники", "ℹ️ Джерела"), callback_data: `sec:sources:${reference}` },
       ],
-      [{ text: label("📄 Всё сразу", "📄 Усе одразу"), callback_data: `all:${reference}` }],
+      [{ text: label("📄 Показать весь отчёт", "📄 Показати весь звіт"), callback_data: `all:${reference}` }],
       [{ text: label("⬅️ К авто", "⬅️ До авто"), callback_data: `back:${reference}` }],
     ],
   };

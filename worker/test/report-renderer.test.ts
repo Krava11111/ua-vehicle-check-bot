@@ -92,9 +92,24 @@ test("no-VIN characteristic differences are not stated as confirmed changes", ()
 
 test("full report is navigable and all-at-once stays within three Telegram messages", () => {
   const value = report();
-  assert.match(ReportRenderer.renderFullReportSummary(value, "ru"), /Выберите раздел/);
+  const summary = ReportRenderer.renderFullReportSummary(value, "ru");
+  assert.match(summary, /STARCAR · ОТЧЁТ/);
+  assert.match(summary, /КОРОТКО ОБ АВТО/);
+  assert.match(summary, /Периодов владения: 2/);
+  assert.match(summary, /Первое известное событие: 01\.10\.2014/);
+  assert.match(summary, /ПРОВЕРКИ/);
+  assert.match(summary, /✅ Розыск: совпадений не найдено/);
+  assert.match(summary, /⚪ Аукционы США: источник не подключён/);
+  assert.match(summary, /Индекс истории Starcar: 100\/100/);
+  assert.match(summary, /Выберите раздел/);
   assert.match(ReportRenderer.renderVinSection(value, "ru").join("\n"), /WMI/);
   const parts = ReportRenderer.renderAll(value, "ru");
+  const all = parts.join("\n");
+  assert.equal(all.includes("Выберите раздел"), false);
+  assert.equal((all.match(/Розыск/g) ?? []).length, 1);
+  assert.equal(all.includes("АУКЦИОНЫ США"), false);
+  assert.equal(all.includes("ИСТОРИЯ ОБЪЯВЛЕНИЙ AUTO.RIA"), false);
+  assert.equal(all.includes("ИСТОРИЯ ПРОБЕГА"), false);
   assert.equal(parts.length <= 3, true);
   assert.equal(parts.every((part) => part.length <= 3_900), true);
 });
