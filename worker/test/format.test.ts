@@ -44,4 +44,6 @@ test("renders compact vehicle", () => {
   assert.match(rendered, /Volkswagen Passat/);
   assert.match(rendered, /KA3333CC/);
   assert.match(rendered, /17\.02\.2024/);
+  assert.match(rendered, /містять дані приблизно з 2013 року/);
+  assert.match(rendered, /Відсутність старої події не означає/);
 });

@@ -19,6 +19,7 @@ from app.database.models import (
     Dataset,
     RegistrationEvent,
     SearchHistory,
+    SearchType,
     User,
     Vehicle,
 )
@@ -60,6 +61,43 @@ async def dashboard(message: Message, session: AsyncSession, settings: Settings)
         )
         or 0
     )
+    today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    plate_history_today = (
+        await session.scalar(
+            select(func.count(SearchHistory.id)).where(
+                SearchHistory.search_type == SearchType.PLATE_HISTORY,
+                SearchHistory.created_at >= today,
+            )
+        )
+        or 0
+    )
+    unique_plate_history_users = (
+        await session.scalar(
+            select(func.count(func.distinct(SearchHistory.user_id))).where(
+                SearchHistory.search_type == SearchType.PLATE_HISTORY
+            )
+        )
+        or 0
+    )
+    plate_history_not_found = (
+        await session.scalar(
+            select(func.count(SearchHistory.id)).where(
+                SearchHistory.search_type == SearchType.PLATE_HISTORY,
+                SearchHistory.found.is_(False),
+            )
+        )
+        or 0
+    )
+    multiple_plates = (
+        select(RegistrationEvent.normalized_plate)
+        .where(RegistrationEvent.normalized_plate.is_not(None))
+        .group_by(RegistrationEvent.normalized_plate)
+        .having(func.count(func.distinct(RegistrationEvent.vehicle_id)) > 1)
+        .subquery()
+    )
+    plates_with_multiple_vehicles = (
+        await session.scalar(select(func.count()).select_from(multiple_plates)) or 0
+    )
     try:
         size = await session.scalar(
             text("SELECT pg_size_pretty(pg_database_size(current_database()))")
@@ -79,6 +117,11 @@ async def dashboard(message: Message, session: AsyncSession, settings: Settings)
         f"🔎 Проверок по номеру: {counts.get('PLATE', 0)}\n"
         f"🔢 VIN-проверок: {counts.get('VIN', 0)}\n"
         f"🛡 Проверок страховки: {counts.get('INSURANCE', 0)}\n"
+        f"🔖 Проверок истории номеров сегодня: {plate_history_today}\n"
+        f"🔖 Всего проверок истории номеров: {counts.get('PLATE_HISTORY', 0)}\n"
+        f"👥 Уникальных пользователей истории номеров: {unique_plate_history_users}\n"
+        f"🔍 Историй номера не найдено: {plate_history_not_found}\n"
+        f"🔄 Номеров с несколькими автомобилями: {plates_with_multiple_vehicles}\n"
         f"📋 Всего запросов: {total}\n"
         f"🚘 Автомобилей: {vehicles}\n"
         f"📑 Регистрационных событий: {events}\n"
@@ -202,6 +245,7 @@ async def clear_cache(message: Message, redis: Redis, settings: Settings) -> Non
         f"vehicle:vin:{query}",
         f"insurance:plate:{query}",
         f"insurance:vin:{query}",
+        f"plate_history:{query}",
     ]
     await Cache(redis).delete(*keys)
     await message.answer("Кеш указанного автомобиля очищен.")

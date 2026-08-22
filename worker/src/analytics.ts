@@ -215,6 +215,7 @@ export function renderVehicleAnalytics(
   wanted: WantedCheck,
   language: Language,
   now: Date = new Date(),
+  historyStartYear = 2013,
 ): string {
   const vehicle = match.vehicle;
   const events = orderedEvents(vehicle.e ?? []);
@@ -258,7 +259,7 @@ export function renderVehicleAnalytics(
   const first = events.find((event) => parseDate(event[0])) ?? events[0];
   const firstDate = parseDate(first?.[0]);
   lines.push("", `🌍 <b>${language === "ru" ? "Регистрация и импорт" : "Реєстрація та імпорт"}</b>`);
-  lines.push(`${language === "ru" ? "Первая известная регистрация в Украине" : "Перша відома реєстрація в Україні"}: ${formatDate(first?.[0])}`);
+  lines.push(`${language === "ru" ? "Первое известное событие в доступной истории Украины" : "Перша відома подія в доступній історії України"}: ${formatDate(first?.[0])}`);
   lines.push(`${language === "ru" ? "Тип операции" : "Тип операції"}: ${escapeHtml(first?.[2] || first?.[1] || "—")}`);
   if (isImported(first?.[2])) lines.push(language === "ru" ? "✅ Первая операция содержит признак ввоза из-за границы." : "✅ Перша операція містить ознаку ввезення з-за кордону.");
   else lines.push(language === "ru" ? "ℹ️ Первая открытая операция не подтверждает и не исключает импорт." : "ℹ️ Перша відкрита операція не підтверджує і не виключає імпорт.");
@@ -268,7 +269,12 @@ export function renderVehicleAnalytics(
   const ownerDates = ownerEvents.map((event) => parseDate(event[0])).filter((date): date is Date => Boolean(date));
   lines.push("", `👥 <b>${language === "ru" ? "История владения" : "Історія володіння"}</b>`);
   lines.push(`${language === "ru" ? "Регистрационных событий" : "Реєстраційних подій"}: ${events.length}`);
-  lines.push(`${language === "ru" ? "Предполагаемых смен владельца" : "Ймовірних змін власника"}: ${ownerEvents.length}`);
+  lines.push(`${language === "ru" ? "Предполагаемых смен владельца в доступной истории" : "Ймовірних змін власника в доступній історії"}: ${ownerEvents.length}`);
+  if (vehicle.y !== null && vehicle.y < historyStartYear) {
+    lines.push(language === "ru"
+      ? "⚠️ Реальное число предыдущих владельцев может быть больше из-за ограниченного периода доступных данных."
+      : "⚠️ Реальна кількість попередніх власників може бути більшою через обмежений період доступних даних.");
+  }
   if (firstDate) lines.push(`${language === "ru" ? "Средний период владения" : "Середній період володіння"}: ${formatDuration(daysBetween(firstDate, now) / Math.max(1, ownerEvents.length + 1), language)}`);
 
   const plateEvents = events.filter((event) => event[3] && event[0]);
@@ -282,7 +288,7 @@ export function renderVehicleAnalytics(
     if (previous) previous.end = date;
     plateSegments.push({ plate, start: date, end: null });
   }
-  lines.push("", `🔖 <b>${language === "ru" ? "История номерных знаков" : "Історія номерних знаків"}</b>`);
+  lines.push("", `🔖 <b>${language === "ru" ? "История номеров автомобиля" : "Історія номерів автомобіля"}</b>`);
   for (const segment of plateSegments.slice(-6)) {
     lines.push(`${escapeHtml(segment.plate)} · ${segment.start.slice(0, 4)}–${segment.end?.slice(0, 4) ?? (language === "ru" ? "н.в." : "дотепер")}`);
   }

@@ -36,5 +36,10 @@ class VehicleRepository:
         )
         return list((await self.session.scalars(statement)).unique().all())
 
+    async def by_id(self, vehicle_id: int) -> Vehicle | None:
+        return await self.session.scalar(
+            self._with_events(select(Vehicle).where(Vehicle.id == vehicle_id))
+        )
+
     async def count(self) -> int:
         return int(await self.session.scalar(select(func.count(Vehicle.id))) or 0)

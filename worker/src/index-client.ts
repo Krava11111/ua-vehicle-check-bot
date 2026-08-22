@@ -1,6 +1,8 @@
 import type {
   CompactVehicle,
+  CompactPlateAssignment,
   IndexManifest,
+  PlateHistoryResult,
   VehicleMatch,
   WantedCheck,
   WantedIndexManifest,
@@ -12,6 +14,7 @@ const ZIP_DIRECTORY_TTL_MS = 10 * 60 * 1000;
 const ZIP_TAIL_BYTES = 65_557;
 const MAX_DIRECTORY_BYTES = 128 * 1024;
 const MAX_SHARD_BYTES = 12 * 1024 * 1024;
+const PLATE_HISTORY_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface ZipEntry {
   method: number;
@@ -26,6 +29,7 @@ interface ZipDirectory {
 
 let cachedManifest: { url: string; expiresAt: number; value: IndexManifest } | null = null;
 const zipDirectoryCache = new Map<string, { expiresAt: number; value: ZipDirectory }>();
+const plateHistoryCache = new Map<string, { expiresAt: number; value: PlateHistoryResult }>();
 
 export async function sha256Prefix(value: string, length: number): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
@@ -45,7 +49,7 @@ export async function loadManifest(url: string, fetcher: typeof fetch = fetch): 
   });
   if (!response.ok) throw new Error(`Manifest request failed: ${response.status}`);
   const manifest = (await response.json()) as IndexManifest;
-  if (![2, 3].includes(manifest.schema_version) || !manifest.archive_url_template || manifest.shard_prefix_length < 1) {
+  if (![2, 3, 4, 5, 6, 7].includes(manifest.schema_version) || !manifest.archive_url_template || manifest.shard_prefix_length < 1) {
     throw new Error("Unsupported vehicle index manifest");
   }
   if (manifest.wanted && (
@@ -63,7 +67,7 @@ export function archiveUrl(manifest: IndexManifest, shard: string): string {
     .replaceAll("{group}", shard[0] ?? "0");
 }
 
-export function memberName(kind: "plates" | "vehicles", shard: string): string {
+export function memberName(kind: "plates" | "vehicles" | "plate-history", shard: string): string {
   return `${kind}-${shard}.json.gz`;
 }
 
@@ -200,7 +204,7 @@ async function loadStoredZipMember(
 
 async function loadShardJson<T>(
   manifest: IndexManifest,
-  kind: "plates" | "vehicles",
+  kind: "plates" | "vehicles" | "plate-history",
   shard: string,
   fetcher: typeof fetch,
 ): Promise<T | null> {
@@ -229,6 +233,33 @@ async function loadVehicle(
   return vehicles?.[key] ?? null;
 }
 
+export function orderVehicleKeysByLatestPlateUse(
+  keys: string[],
+  assignments: CompactPlateAssignment[],
+): string[] {
+  const latestByKey = new Map<string, readonly [number, number, string]>();
+  const recency = (assignment: CompactPlateAssignment): readonly [number, number, string] => {
+    const date = assignment[8] ?? assignment[7] ?? "";
+    const dateYear = date ? Number(date.slice(0, 4)) || 0 : 0;
+    return [dateYear || assignment[11] || 0, date ? 1 : 0, date];
+  };
+  const compareRecency = (
+    left: readonly [number, number, string],
+    right: readonly [number, number, string],
+  ): number => left[0] - right[0] || left[1] - right[1] || left[2].localeCompare(right[2]);
+  for (const assignment of assignments) {
+    const key = assignment[0];
+    const value = recency(assignment);
+    const current = latestByKey.get(key);
+    if (!current || compareRecency(value, current) > 0) latestByKey.set(key, value);
+  }
+  return [...keys].sort((left, right) => {
+    const empty: readonly [number, number, string] = [0, 0, ""];
+    const recencyOrder = compareRecency(latestByKey.get(right) ?? empty, latestByKey.get(left) ?? empty);
+    return recencyOrder || left.localeCompare(right);
+  });
+}
+
 export async function findVehicles(
   kind: "PLATE" | "VIN",
   normalized: string,
@@ -243,6 +274,15 @@ export async function findVehicles(
     const shard = await sha256Prefix(normalized, manifest.shard_prefix_length);
     const plates = await loadShardJson<Record<string, string[]>>(manifest, "plates", shard, fetcher);
     keys = plates?.[normalized] ?? [];
+    if (keys.length > 1 && (manifest.schema_version >= 4 || manifest.plate_history_available)) {
+      const histories = await loadShardJson<Record<string, CompactPlateAssignment[]>>(
+        manifest,
+        "plate-history",
+        shard,
+        fetcher,
+      );
+      keys = orderVehicleKeysByLatestPlateUse(keys, histories?.[normalized] ?? []);
+    }
   }
   const limited = keys.slice(0, Math.max(1, maxCandidates));
   const vehicles = await Promise.all(limited.map((key) => loadVehicle(key, manifest, fetcher)));
@@ -250,6 +290,73 @@ export async function findVehicles(
     const key = limited[index];
     return vehicle && key ? [{ key, vehicle, matchedBy: kind, candidates: keys.length }] : [];
   });
+}
+
+function fallbackAssignment(key: string, vehicle: CompactVehicle, plate: string): CompactPlateAssignment | null {
+  const events = (vehicle.e ?? []).filter((event) => event[3] === plate);
+  if (!events.length && vehicle.p !== plate) return null;
+  const dates = events.map((event) => event[0]).filter((value): value is string => Boolean(value)).sort();
+  return [
+    key,
+    vehicle.v,
+    vehicle.b,
+    vehicle.m,
+    vehicle.y,
+    vehicle.c,
+    vehicle.k,
+    dates[0] ?? null,
+    dates.at(-1) ?? null,
+    Math.max(1, events.length),
+    events.length > 1 ? "MEDIUM" : "LOW",
+  ];
+}
+
+export async function findPlateHistory(
+  normalizedPlate: string,
+  manifest: IndexManifest,
+  maxCandidates: number,
+  fetcher: typeof fetch = fetch,
+): Promise<PlateHistoryResult> {
+  const limit = Math.max(1, maxCandidates);
+  const cacheKey = `${manifest.version}:${normalizedPlate}:${limit}`;
+  const cached = plateHistoryCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const shard = await sha256Prefix(normalizedPlate, manifest.shard_prefix_length);
+  let all: CompactPlateAssignment[] | null = null;
+  let totalAssignments: number | null = null;
+  if (manifest.schema_version >= 4 || manifest.plate_history_available) {
+    const histories = await loadShardJson<Record<string, CompactPlateAssignment[]>>(
+      manifest,
+      "plate-history",
+      shard,
+      fetcher,
+    );
+    all = histories?.[normalizedPlate] ?? [];
+  }
+  let source: PlateHistoryResult["source"] = "plate-history";
+  if (all === null) {
+    source = "vehicle-fallback";
+    const plates = await loadShardJson<Record<string, string[]>>(manifest, "plates", shard, fetcher);
+    const keys = plates?.[normalizedPlate] ?? [];
+    totalAssignments = keys.length;
+    const vehicles = await Promise.all(
+      keys.slice(0, limit).map(async (key) => [key, await loadVehicle(key, manifest, fetcher)] as const),
+    );
+    all = vehicles.flatMap(([key, vehicle]) => {
+      const assignment = vehicle ? fallbackAssignment(key, vehicle, normalizedPlate) : null;
+      return assignment ? [assignment] : [];
+    });
+  }
+  const sorted = [...all].sort((left, right) => (left[7] ?? "9999").localeCompare(right[7] ?? "9999"));
+  const value: PlateHistoryResult = {
+    plate: normalizedPlate,
+    assignments: sorted.slice(0, limit),
+    totalAssignments: totalAssignments ?? sorted.length,
+    truncated: (totalAssignments ?? sorted.length) > limit,
+    source,
+  };
+  plateHistoryCache.set(cacheKey, { expiresAt: Date.now() + PLATE_HISTORY_TTL_MS, value });
+  return value;
 }
 
 async function loadWantedIdentifier(
@@ -306,4 +413,5 @@ export async function checkWanted(
 export function clearCachesForTests(): void {
   cachedManifest = null;
   zipDirectoryCache.clear();
+  plateHistoryCache.clear();
 }

@@ -27,12 +27,14 @@ SOURCE_PAGE = f"https://data.gov.ua/dataset/{DATASET_ID}"
 SOURCE_LABEL = "МВС України / data.gov.ua"
 WANTED_SOURCE_PAGE = f"https://data.gov.ua/dataset/{WANTED_DATASET_ID}"
 WANTED_SOURCE_LABEL = "Національна поліція України / data.gov.ua"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 7
 WANTED_SCHEMA_VERSION = 1
 DEFAULT_PREFIX_LENGTH = 3
 DEFAULT_MAX_EVENTS = 50
 MAX_GITHUB_RELEASE_ASSET_BYTES = 2_000_000_000
 MAX_WORKER_SHARD_BYTES = 12 * 1024 * 1024
+PLATE_ASSIGNMENT_START_MARKERS = ("ПРИСВО", "ВИДАЧ", "ЗАКРІП", "НАЗНАЧ")
+PLATE_ASSIGNMENT_END_MARKERS = ("ЗНЯТ", "СКАСУВАН", "АНУЛЬОВАН")
 
 CYRILLIC_TO_LATIN = str.maketrans(
     {"А": "A", "В": "B", "Е": "E", "І": "I", "К": "K", "М": "M", "Н": "H", "О": "O", "Р": "P", "С": "C", "Т": "T", "Х": "X"}
@@ -42,6 +44,7 @@ VIN_RE = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$")
 YEAR_RE = re.compile(r"(?<!\d)(20\d{2}|19\d{2})(?!\d)")
 
 ALIASES: dict[str, tuple[str, ...]] = {
+    "source_vehicle_id": ("source_vehicle_id", "vehicle_id"),
     "vin": ("vin", "vin_code"),
     "plate": ("n_reg_new", "plate", "number", "reg_number"),
     "registration_date": ("d_reg", "registration_date", "date_reg"),
@@ -104,6 +107,7 @@ class CompactRow:
     engine_capacity: int | None
     own_weight: int | None
     total_weight: int | None
+    source_archive_year: int | None
 
     def spool_value(self) -> list[Any]:
         return [
@@ -126,6 +130,7 @@ class CompactRow:
             self.engine_capacity,
             self.own_weight,
             self.total_weight,
+            self.source_archive_year,
         ]
 
     @classmethod
@@ -344,7 +349,7 @@ def _integer(value: str | None) -> int | None:
 def _iso_date(value: str | None) -> str | None:
     if not value:
         return None
-    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d"):
+    for fmt in ("%d.%m.%Y", "%d.%m.%y", "%Y-%m-%d", "%d/%m/%Y", "%d/%m/%y", "%Y/%m/%d"):
         try:
             return datetime.strptime(value[:10], fmt).date().isoformat()
         except ValueError:
@@ -352,12 +357,49 @@ def _iso_date(value: str | None) -> str | None:
     return None
 
 
-def _compact_row(row: dict[str, str], mapping: dict[str, str]) -> CompactRow | None:
+def _compact_row(
+    row: dict[str, str],
+    mapping: dict[str, str],
+    source_archive_year: int | None = None,
+) -> CompactRow | None:
     vin = normalize_vin(_text(row, mapping, "vin"))
     plate = normalize_plate(_text(row, mapping, "plate"))
     if not vin and not plate:
         return None
-    key = vin or f"P:{plate}"
+    source_vehicle_id = _text(row, mapping, "source_vehicle_id")
+    if vin:
+        key = vin
+    elif source_vehicle_id:
+        stable = hashlib.sha256(source_vehicle_id.encode()).hexdigest()[:24]
+        key = f"S:{stable}"
+    else:
+        # A plate can be reused on unrelated vehicles.  Without VIN or a stable
+        # source identifier, cluster only rows with the same core characteristics.
+        # Including the plate deliberately avoids linking a no-VIN vehicle across
+        # plate changes that cannot be proven from the open row alone.
+        characteristics = [
+            plate,
+            _text(row, mapping, "brand"),
+            _text(row, mapping, "model"),
+            _text(row, mapping, "year"),
+            _text(row, mapping, "engine_capacity"),
+            _text(row, mapping, "fuel_type"),
+            _text(row, mapping, "body_type"),
+            _text(row, mapping, "vehicle_type"),
+        ]
+        if any(value for value in characteristics[1:]):
+            raw = "|".join(str(value or "").strip().casefold() for value in characteristics)
+            key = f"F:{hashlib.sha256(raw.encode()).hexdigest()[:24]}"
+        else:
+            unresolved = [
+                plate,
+                _text(row, mapping, "registration_date"),
+                _text(row, mapping, "operation_code"),
+                _text(row, mapping, "operation_name"),
+                _text(row, mapping, "service_center"),
+            ]
+            raw = "|".join(str(value or "").strip().casefold() for value in unresolved)
+            key = f"U:{hashlib.sha256(raw.encode()).hexdigest()[:24]}"
     return CompactRow(
         key=key,
         vin=vin,
@@ -378,10 +420,14 @@ def _compact_row(row: dict[str, str], mapping: dict[str, str]) -> CompactRow | N
         engine_capacity=_integer(_text(row, mapping, "engine_capacity")),
         own_weight=_integer(_text(row, mapping, "own_weight")),
         total_weight=_integer(_text(row, mapping, "total_weight")),
+        source_archive_year=source_archive_year,
     )
 
 
-def _iter_csv_stream(binary: BinaryIO) -> Iterator[CompactRow]:
+def _iter_csv_stream(
+    binary: BinaryIO,
+    source_archive_year: int | None = None,
+) -> Iterator[CompactRow]:
     sample = binary.read(65536)
     encoding = _detect_encoding(sample)
     sample_text = sample.decode(encoding, errors="replace")
@@ -391,7 +437,7 @@ def _iter_csv_stream(binary: BinaryIO) -> Iterator[CompactRow]:
     reader = csv.DictReader(stream, delimiter=delimiter)
     mapping = _column_map(list(reader.fieldnames or []))
     for raw in reader:
-        row = _compact_row(raw, mapping)
+        row = _compact_row(raw, mapping, source_archive_year)
         if row:
             yield row
 
@@ -440,7 +486,10 @@ class _PrefixedStream(io.RawIOBase):
         return written
 
 
-def _iter_rows(path: Path) -> Iterator[CompactRow]:
+def _iter_rows(
+    path: Path,
+    source_archive_year: int | None = None,
+) -> Iterator[CompactRow]:
     if zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as archive:
             members = [item for item in archive.infolist() if not item.is_dir() and item.filename.lower().endswith(".csv")]
@@ -454,10 +503,10 @@ def _iter_rows(path: Path) -> Iterator[CompactRow]:
                 raise ValueError(f"No supported CSV content in {path.name}; members: {names}")
             for member in members:
                 with archive.open(member) as stream:
-                    yield from _iter_csv_stream(cast(BinaryIO, stream))
+                    yield from _iter_csv_stream(cast(BinaryIO, stream), source_archive_year)
     else:
         with path.open("rb") as stream:
-            yield from _iter_csv_stream(stream)
+            yield from _iter_csv_stream(stream, source_archive_year)
 
 
 def _download(resource: dict[str, Any], target_dir: Path) -> Path:
@@ -498,6 +547,16 @@ def _event_key(event: list[Any]) -> str:
     return "\x1f".join(str(item or "") for item in event)
 
 
+def _recency_key(
+    registration_date: str | None,
+    source_archive_year: int | None,
+) -> tuple[int, int, str]:
+    """Use the exact operation date, or the archive year when the date is absent."""
+    date_year = int(registration_date[:4]) if registration_date else 0
+    effective_year = date_year or source_archive_year or 0
+    return (effective_year, 1 if registration_date else 0, registration_date or "")
+
+
 def _new_vehicle(row: CompactRow) -> dict[str, Any]:
     return {
         "v": row.vin,
@@ -513,8 +572,9 @@ def _new_vehicle(row: CompactRow) -> dict[str, Any]:
         "ec": row.engine_capacity,
         "ow": row.own_weight,
         "tw": row.total_weight,
+        "sy": row.source_archive_year,
         "e": [],
-        "_latest": row.registration_date or "",
+        "_latest": _recency_key(row.registration_date, row.source_archive_year),
         "_events": set(),
     }
 
@@ -525,17 +585,116 @@ def _merge_vehicle(vehicle: dict[str, Any], row: CompactRow) -> None:
     if event_key not in vehicle["_events"]:
         vehicle["_events"].add(event_key)
         vehicle["e"].append(event)
-    row_date = row.registration_date or ""
-    if row_date >= vehicle["_latest"]:
-        vehicle["_latest"] = row_date
+    row_recency = _recency_key(row.registration_date, row.source_archive_year)
+    if row_recency >= vehicle["_latest"]:
+        vehicle["_latest"] = row_recency
         for key, value in (
             ("v", row.vin), ("p", row.plate), ("b", row.brand), ("m", row.model),
             ("y", row.year), ("c", row.color), ("k", row.vehicle_type), ("bt", row.body_type),
             ("pu", row.purpose), ("f", row.fuel_type), ("ec", row.engine_capacity),
             ("ow", row.own_weight), ("tw", row.total_weight),
+            ("sy", row.source_archive_year),
         ):
             if value is not None:
                 vehicle[key] = value
+
+
+def _plate_spool_value(row: CompactRow) -> list[Any]:
+    return [
+        row.plate,
+        row.key,
+        row.vin,
+        row.registration_date,
+        row.operation_code,
+        row.operation_name,
+        row.brand,
+        row.model,
+        row.year,
+        row.color,
+        row.vehicle_type,
+        row.service_center,
+        row.source_archive_year,
+    ]
+
+
+def _plate_assignment_identity(value: list[Any]) -> str:
+    vehicle_key, vin = value[1], value[2]
+    if vin:
+        return f"vin:{vin}"
+    return f"key:{vehicle_key}"
+
+
+def _merge_plate_assignment(assignments: dict[str, dict[str, Any]], value: list[Any]) -> None:
+    plate, vehicle_key, vin, registration_date, operation_code, operation_name, brand, model, year, color, vehicle_type, _, source_archive_year = value
+    identity = _plate_assignment_identity(value)
+    text = f"{operation_code or ''} {operation_name or ''}".upper()
+    assignment = assignments.setdefault(
+        identity,
+        {
+            "vehicle_key": vehicle_key,
+            "vin": vin,
+            "brand": brand,
+            "model": model,
+            "year": year,
+            "color": color,
+            "vehicle_type": vehicle_type,
+            "first": registration_date,
+            "last": registration_date,
+            "count": 0,
+            "start": False,
+            "end": False,
+            "latest": _recency_key(registration_date, source_archive_year),
+            "source_archive_year": source_archive_year,
+            "plate": plate,
+        },
+    )
+    assignment["count"] += 1
+    if registration_date:
+        assignment["first"] = min(assignment["first"] or registration_date, registration_date)
+        assignment["last"] = max(assignment["last"] or registration_date, registration_date)
+    if source_archive_year:
+        assignment["source_archive_year"] = max(
+            assignment["source_archive_year"] or source_archive_year,
+            source_archive_year,
+        )
+    assignment["start"] = assignment["start"] or any(
+        marker in text for marker in PLATE_ASSIGNMENT_START_MARKERS
+    )
+    assignment["end"] = assignment["end"] or any(
+        marker in text for marker in PLATE_ASSIGNMENT_END_MARKERS
+    )
+    row_recency = _recency_key(registration_date, source_archive_year)
+    if row_recency >= assignment["latest"]:
+        assignment["latest"] = row_recency
+        for key, item in (
+            ("vehicle_key", vehicle_key),
+            ("vin", vin),
+            ("brand", brand),
+            ("model", model),
+            ("year", year),
+            ("color", color),
+            ("vehicle_type", vehicle_type),
+        ):
+            if item is not None:
+                assignment[key] = item
+
+
+def _serialize_plate_assignment(value: dict[str, Any]) -> list[Any]:
+    confidence = "HIGH" if value["start"] and value["end"] else "MEDIUM" if value["count"] > 1 else "LOW"
+    return [
+        value["vehicle_key"],
+        value["vin"],
+        value["brand"],
+        value["model"],
+        value["year"],
+        value["color"],
+        value["vehicle_type"],
+        value["first"],
+        value["last"],
+        value["count"],
+        confidence,
+        value["source_archive_year"],
+    ]
 
 
 def _gzip_json(path: Path, value: Any) -> None:
@@ -587,6 +746,7 @@ def build_index(
     plate_writers = LruWriters(work / "plate-spool")
     rows_seen = 0
     valid_rows = 0
+    data_coverage_through: str | None = None
     try:
         downloads = work / "downloads"
         downloads.mkdir()
@@ -599,13 +759,22 @@ def build_index(
             )
             path = _download(resource, downloads)
             resource_rows = 0
-            for row in _iter_rows(path):
+            resource_year = resource.get("year")
+            source_archive_year = int(resource_year) if resource_year is not None else None
+            for row in _iter_rows(path, source_archive_year):
                 rows_seen += 1
                 valid_rows += 1
                 resource_rows += 1
+                if row.registration_date and (
+                    data_coverage_through is None
+                    or row.registration_date > data_coverage_through
+                ):
+                    data_coverage_through = row.registration_date
                 vehicle_writers.write(shard_for(row.key, prefix_length), row.spool_value())
                 if row.plate:
-                    plate_writers.write(shard_for(row.plate, prefix_length), [row.plate, row.key])
+                    plate_writers.write(
+                        shard_for(row.plate, prefix_length), _plate_spool_value(row)
+                    )
             print(f"[{resource_index}/{resource_total}] Accepted {resource_rows:,} rows", flush=True)
             if not str(resource["url"]).startswith("file:"):
                 path.unlink(missing_ok=True)
@@ -619,6 +788,7 @@ def build_index(
         plate_count = 0
         nonempty_vehicle_shards = 0
         nonempty_plate_shards = 0
+        plate_assignment_count = 0
 
         for spool in sorted((work / "vehicle-spool").glob("*.jsonl")):
             vehicles: dict[str, dict[str, Any]] = {}
@@ -641,14 +811,29 @@ def build_index(
 
         for spool in sorted((work / "plate-spool").glob("*.jsonl")):
             plates: dict[str, set[str]] = {}
+            histories: dict[str, dict[str, dict[str, Any]]] = {}
             with spool.open("r", encoding="utf-8") as stream:
                 for line in stream:
-                    plate, key = json.loads(line)
+                    value = json.loads(line)
+                    plate, key = value[0], value[1]
                     plates.setdefault(plate, set()).add(key)
+                    _merge_plate_assignment(histories.setdefault(plate, {}), value)
             serialized = {plate: sorted(keys) for plate, keys in plates.items()}
+            serialized_history = {
+                plate: sorted(
+                    (_serialize_plate_assignment(item) for item in assignments.values()),
+                    key=lambda item: (item[7] or "9999", item[0]),
+                )
+                for plate, assignments in histories.items()
+            }
             shard = spool.stem
             _gzip_json(assets / shard[0] / f"plates-{shard}.json.gz", serialized)
+            _gzip_json(
+                assets / shard[0] / f"plate-history-{shard}.json.gz",
+                serialized_history,
+            )
             plate_count += len(serialized)
+            plate_assignment_count += sum(len(items) for items in serialized_history.values())
             nonempty_plate_shards += 1
 
         archives = output_dir / "archives"
@@ -658,18 +843,25 @@ def build_index(
         stamp = re.sub(r"[^0-9]", "", str(metadata.get("dataset_modified") or ""))[:14]
         if not stamp:
             stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
-        version = f"{stamp}-{metadata['source_fingerprint'][:12]}"
+        # Include the schema in the immutable release identity.  The official
+        # source fingerprint can stay unchanged while parsing/index semantics
+        # improve; reusing the old tag would otherwise serve stale archives.
+        version = f"{stamp}-s{SCHEMA_VERSION}-{metadata['source_fingerprint'][:12]}"
         manifest = {
             "schema_version": SCHEMA_VERSION,
             "version": version,
             "generated_at": datetime.now(UTC).isoformat(),
             "dataset_updated_at": metadata.get("dataset_modified"),
+            "data_coverage_through": data_coverage_through,
+            "update_frequency": "monthly",
             "source_fingerprint": metadata["source_fingerprint"],
             "source_label": SOURCE_LABEL,
             "source_url": metadata.get("source_page") or SOURCE_PAGE,
             "repository": repository,
             "shard_prefix_length": prefix_length,
             "max_events_per_vehicle": max_events,
+            "history_start_year": metadata.get("from_year") or 2013,
+            "plate_history_available": True,
             "archive_url_template": f"https://github.com/{repository}/releases/download/vehicle-data-{{version}}-{{group}}/index-{{group}}.zip",
             "counts": {
                 "input_rows": rows_seen,
@@ -679,6 +871,7 @@ def build_index(
                 "events": event_count,
                 "vehicle_shards": nonempty_vehicle_shards,
                 "plate_shards": nonempty_plate_shards,
+                "plate_assignments": plate_assignment_count,
                 "archives": len(archive_sizes),
                 "archive_bytes": sum(archive_sizes.values()),
             },
@@ -836,10 +1029,23 @@ def command_wanted_metadata(args: argparse.Namespace) -> int:
     return 0
 
 
+def vehicle_index_changed(
+    metadata: dict[str, Any] | None,
+    current: dict[str, Any] | None,
+) -> bool:
+    if not metadata or not current:
+        return True
+    current_schema = int(current.get("schema_version") or 0)
+    return (
+        current_schema < SCHEMA_VERSION
+        or metadata.get("source_fingerprint") != current.get("source_fingerprint")
+    )
+
+
 def command_changed(args: argparse.Namespace) -> int:
     metadata = _read_json(args.metadata)
     current = _read_json(args.manifest)
-    changed = not metadata or not current or metadata.get("source_fingerprint") != current.get("source_fingerprint")
+    changed = vehicle_index_changed(metadata, current)
     if args.github_output:
         with args.github_output.open("a", encoding="utf-8") as stream:
             stream.write(f"changed={'true' if changed else 'false'}\n")
@@ -910,6 +1116,32 @@ def command_compose_manifest(args: argparse.Namespace) -> int:
     return 0
 
 
+def ensure_manifest_schema_not_downgraded(
+    candidate: dict[str, Any], current: dict[str, Any] | None
+) -> None:
+    if current is None:
+        return
+    candidate_schema = int(candidate.get("schema_version") or 0)
+    current_schema = int(current.get("schema_version") or 0)
+    if candidate_schema < current_schema:
+        raise ValueError(
+            "Refusing to publish vehicle manifest schema "
+            f"{candidate_schema} over current schema {current_schema}"
+        )
+
+
+def command_guard_publish(args: argparse.Namespace) -> int:
+    candidate = _read_json(args.candidate)
+    if candidate is None:
+        raise SystemExit("Candidate manifest is missing or invalid")
+    current = _read_json(args.current)
+    try:
+        ensure_manifest_schema_not_downgraded(candidate, current)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    return 0
+
+
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build sharded vehicle search assets for GitHub Releases")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -964,6 +1196,13 @@ def make_parser() -> argparse.ArgumentParser:
     compose.add_argument("--wanted", type=Path)
     compose.add_argument("--output", type=Path, required=True)
     compose.set_defaults(func=command_compose_manifest)
+
+    guard_publish = sub.add_parser(
+        "guard-publish", help="Reject a current manifest schema downgrade"
+    )
+    guard_publish.add_argument("--candidate", type=Path, required=True)
+    guard_publish.add_argument("--current", type=Path, required=True)
+    guard_publish.set_defaults(func=command_guard_publish)
     return parser
 
 

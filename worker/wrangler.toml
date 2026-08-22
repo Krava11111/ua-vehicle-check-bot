@@ -7,9 +7,33 @@ workers_dev = true
 INDEX_MANIFEST_URL = "https://github.com/Krava11111/ua-vehicle-check-bot/releases/download/vehicle-data-current/manifest.json"
 DEFAULT_LANGUAGE = "uk"
 RATE_LIMIT_PER_MINUTE = "10"
-MAX_CANDIDATES = "3"
+MAX_CANDIDATES = "10"
+MAX_PLATE_HISTORY_CANDIDATES = "20"
+VEHICLE_HISTORY_START_YEAR = "2013"
+HISTORY_CACHE_TTL = "21600"
+ODOMETER_ROLLBACK_TOLERANCE_KM = "1000"
+HISTORY_SCORE_ENABLED = "true"
+AUTO_RIA_SEARCH_URL = "https://developers.ria.com/auto/search"
+AUTO_RIA_INFO_URL = "https://developers.ria.com/auto/info"
+AUCTION_API_BASE_URL = "https://apibara.tech/api/v1/vehicle-auction"
+BIDFAX_BASE_URL = "https://bidfax.co/"
+WELCOME_IMAGE_URL = "https://ua-vehicle-check-bot.ukraine-vehicle-telegram-worker.workers.dev/welcome.png"
+
+[[rules]]
+type = "Data"
+globs = ["**/*.png"]
+fallthrough = true
+
+[[d1_databases]]
+binding = "HISTORY_DB"
+database_name = "ua-vehicle-history"
+database_id = "d53e5f09-5f12-43c6-a65f-503a4b2a285b"
+migrations_dir = "migrations"
 
 # Add secrets with:
 #   npx wrangler secret put BOT_TOKEN
 #   npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 #   npx wrangler secret put WEBHOOK_SECRET_PATH
+#   npx wrangler secret put HISTORY_IMPORT_SECRET
+#   npx wrangler secret put AUTO_RIA_API_KEY
+#   npx wrangler secret put AUCTION_API_KEY

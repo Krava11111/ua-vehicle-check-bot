@@ -16,8 +16,10 @@ from app.config import get_settings
 from app.database.models import ApplicationError
 from app.database.session import create_engine_and_session
 from app.logging import configure_logging
+from app.services.auction_history.providers import DisabledAuctionProvider, MockAuctionProvider
 from app.services.insurance.disabled_provider import DisabledInsuranceProvider
 from app.services.insurance.mock_provider import MockInsuranceProvider
+from app.services.marketplace_history.providers import AutoRiaProvider, MockAutoRiaProvider
 
 
 async def main() -> None:
@@ -38,6 +40,16 @@ async def main() -> None:
         MockInsuranceProvider()
         if settings.insurance_provider == "mock"
         else DisabledInsuranceProvider()
+    )
+    dispatcher["marketplace_provider"] = (
+        MockAutoRiaProvider()
+        if settings.auto_ria_enabled and settings.marketplace_provider == "mock"
+        else AutoRiaProvider()
+    )
+    dispatcher["auction_provider"] = (
+        MockAuctionProvider()
+        if settings.auction_history_enabled and settings.auction_provider == "mock"
+        else DisabledAuctionProvider()
     )
     middleware = DatabaseMiddleware(session_factory)
     dispatcher.message.outer_middleware(middleware)

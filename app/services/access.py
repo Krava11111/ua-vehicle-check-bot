@@ -13,6 +13,14 @@ class Feature(StrEnum):
     HISTORY = "history"
     INSURANCE = "insurance"
     PDF = "pdf"
+    AUCTION_HISTORY = "auction_history"
+    AUCTION_PHOTOS = "auction_photos"
+    MARKETPLACE_HISTORY = "marketplace_history"
+    ODOMETER_HISTORY = "odometer_history"
+    FULL_REPORT = "full_report"
+    FULL_TIMELINE = "full_timeline"
+    HISTORY_SCORE = "history_score"
+    PLATE_HISTORY = "plate_history"
 
 
 class AccessService:
@@ -28,6 +36,16 @@ class AccessService:
             Feature.HISTORY: self.settings.free_history,
             Feature.INSURANCE: self.settings.free_insurance_search,
             Feature.PDF: self.settings.pdf_reports_enabled and not self.settings.payments_enabled,
+            Feature.AUCTION_HISTORY: self.settings.free_auction_history,
+            Feature.AUCTION_PHOTOS: self.settings.free_auction_photos,
+            Feature.MARKETPLACE_HISTORY: self.settings.free_marketplace_history,
+            Feature.ODOMETER_HISTORY: self.settings.free_odometer_history,
+            Feature.FULL_REPORT: self.settings.free_full_report,
+            Feature.FULL_TIMELINE: self.settings.free_full_timeline,
+            Feature.HISTORY_SCORE: self.settings.free_history_score,
+            Feature.PLATE_HISTORY: (
+                self.settings.plate_history_enabled and self.settings.free_plate_history
+            ),
         }[feature]
         if not self.settings.payments_enabled:
             return free
