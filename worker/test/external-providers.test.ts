@@ -35,15 +35,14 @@ test("AUTO.RIA lookup uses the documented VIN array and imports only an exact VI
     }
     const id = url.searchParams.get("auto_id");
     if (id === "123") return Response.json({
-      autoId: 123,
       VIN: "5UXTR9C55JLC73127",
       USD: 19_500,
-      raceInt: 57,
       locationCityName: "Київ",
       linkToView: "https://auto.ria.com/uk/auto_123.html",
       updateDate: "2026-08-21T10:00:00Z",
-      isSold: false,
-      autoData: { markName: "BMW", modelName: "X3", year: 2018 },
+      markName: "BMW",
+      modelName: "X3",
+      autoData: { autoId: 123, raceInt: 57, isSold: false, year: 2018 },
     });
     return Response.json({
       autoId: 456,

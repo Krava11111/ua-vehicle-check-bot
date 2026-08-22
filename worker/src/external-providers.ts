@@ -106,13 +106,14 @@ function autoRiaListing(payload: unknown, expectedVin: string): MarketplaceImpor
   const data = record(root.data ?? root.result ?? root);
   const autoData = record(data.autoData ?? data.auto_data);
   const location = record(data.locationCityName ?? data.location);
+  const stateData = record(data.stateData);
   const vin = normalizeVin(data.VIN ?? data.vin ?? autoData.VIN ?? autoData.vin);
   if (vin !== expectedVin) return null;
-  const externalId = text(data.autoId, data.auto_id, data.id);
+  const externalId = text(data.autoId, data.auto_id, data.id, autoData.autoId, autoData.auto_id);
   if (!externalId) return null;
   const price = number(data.USD, data.price, record(data.price)?.value);
-  const exactMileage = number(data.mileage, data.race);
-  const raceThousands = number(data.raceInt);
+  const exactMileage = number(data.mileage, data.race, autoData.mileage, autoData.race);
+  const raceThousands = number(data.raceInt, autoData.raceInt);
   const mileage = exactMileage ?? (raceThousands === null ? null : raceThousands * 1_000);
   return {
     provider: "AUTO.RIA",
@@ -120,18 +121,18 @@ function autoRiaListing(payload: unknown, expectedVin: string): MarketplaceImpor
     vin,
     url: text(data.linkToView, data.url) ?? `https://auto.ria.com/uk/auto_${externalId}.html`,
     title: text(data.title, data.titleHead),
-    brand: text(autoData.markName, data.markName, data.brand),
-    model: text(autoData.modelName, data.modelName, data.model),
+    brand: text(data.markName, autoData.markName, data.brand),
+    model: text(data.modelName, autoData.modelName, data.model),
     year: number(autoData.year, data.year),
     price,
     currency: price === null ? null : "USD",
     mileage,
     mileageUnit: mileage === null ? null : "km",
     city: text(data.locationCityName, location.name, data.city),
-    region: text(data.stateDataName, data.region),
+    region: text(data.stateDataName, stateData.regionName, stateData.name, data.region),
     sellerType: text(data.userType, data.sellerType),
     observedAt: isoDate(data.updateDate, data.addDate, data.created_at),
-    isActive: boolean(data.isSold) !== true,
+    isActive: boolean(data.isSold, autoData.isSold) !== true,
   };
 }
 
