@@ -15,7 +15,7 @@ export interface ProviderRefreshResult {
 
 const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/;
 const REFRESH_CACHE_ORIGIN = "https://external-provider-refresh.invalid";
-const PROVIDER_CACHE_SCHEMA = "v2-exact-auction-vin";
+const PROVIDER_CACHE_SCHEMA = "v3-autoria-vin-array";
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
