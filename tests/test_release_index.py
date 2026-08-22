@@ -13,6 +13,7 @@ from tools.build_release_index import (
     ensure_manifest_schema_not_downgraded,
     local_metadata,
     shard_for,
+    vehicle_index_changed,
 )
 
 
@@ -55,6 +56,7 @@ def test_builds_plate_and_vehicle_shards(tmp_path: Path) -> None:
     assert manifest["update_frequency"] == "monthly"
     assert manifest["history_start_year"] == 2013
     assert manifest["counts"]["plate_assignments"] == 2
+    assert "-s7-" in manifest["version"]
     assert vehicles[vin]["e"][0][6] == "Чорний"
 
 
@@ -71,6 +73,23 @@ def test_manifest_schema_cannot_be_downgraded() -> None:
 
     ensure_manifest_schema_not_downgraded(
         {"schema_version": 5}, {"schema_version": 5}
+    )
+
+
+def test_rebuilds_when_current_manifest_schema_is_stale() -> None:
+    metadata = {"source_fingerprint": "same"}
+
+    assert vehicle_index_changed(
+        metadata,
+        {"source_fingerprint": "same", "schema_version": 3},
+    )
+    assert not vehicle_index_changed(
+        metadata,
+        {"source_fingerprint": "same", "schema_version": 7},
+    )
+    assert vehicle_index_changed(
+        metadata,
+        {"source_fingerprint": "different", "schema_version": 7},
     )
 
 

@@ -843,7 +843,10 @@ def build_index(
         stamp = re.sub(r"[^0-9]", "", str(metadata.get("dataset_modified") or ""))[:14]
         if not stamp:
             stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
-        version = f"{stamp}-{metadata['source_fingerprint'][:12]}"
+        # Include the schema in the immutable release identity.  The official
+        # source fingerprint can stay unchanged while parsing/index semantics
+        # improve; reusing the old tag would otherwise serve stale archives.
+        version = f"{stamp}-s{SCHEMA_VERSION}-{metadata['source_fingerprint'][:12]}"
         manifest = {
             "schema_version": SCHEMA_VERSION,
             "version": version,
@@ -1026,10 +1029,23 @@ def command_wanted_metadata(args: argparse.Namespace) -> int:
     return 0
 
 
+def vehicle_index_changed(
+    metadata: dict[str, Any] | None,
+    current: dict[str, Any] | None,
+) -> bool:
+    if not metadata or not current:
+        return True
+    current_schema = int(current.get("schema_version") or 0)
+    return (
+        current_schema < SCHEMA_VERSION
+        or metadata.get("source_fingerprint") != current.get("source_fingerprint")
+    )
+
+
 def command_changed(args: argparse.Namespace) -> int:
     metadata = _read_json(args.metadata)
     current = _read_json(args.manifest)
-    changed = not metadata or not current or metadata.get("source_fingerprint") != current.get("source_fingerprint")
+    changed = vehicle_index_changed(metadata, current)
     if args.github_output:
         with args.github_output.open("a", encoding="utf-8") as stream:
             stream.write(f"changed={'true' if changed else 'false'}\n")
