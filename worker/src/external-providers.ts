@@ -131,17 +131,19 @@ function autoRiaListing(payload: unknown, expectedVin: string): MarketplaceImpor
     region: text(data.stateDataName, data.region),
     sellerType: text(data.userType, data.sellerType),
     observedAt: isoDate(data.updateDate, data.addDate, data.created_at),
-    isActive: true,
+    isActive: boolean(data.isSold) !== true,
   };
 }
 
-async function fetchAutoRia(vin: string, env: Env): Promise<MarketplaceImportRecord[]> {
+export async function fetchAutoRia(vin: string, env: Env): Promise<MarketplaceImportRecord[]> {
   const apiKey = env.AUTO_RIA_API_KEY;
   if (!apiKey) return [];
   const search = new URL(env.AUTO_RIA_SEARCH_URL ?? "https://developers.ria.com/auto/search");
   search.searchParams.set("api_key", apiKey);
-  search.searchParams.set("vin", vin);
-  search.searchParams.set("search_by_parameters[vin]", vin);
+  // AUTO.RIA search V1 documents VIN as an array parameter named exactly `VIN`.
+  // Lower-case `vin` is silently ignored by the API and produces unrelated/empty results.
+  search.searchParams.set("VIN[0]", vin);
+  search.searchParams.set("searchType", "4");
   search.searchParams.set("countpage", "10");
   const searchPayload = await jsonResponse(await fetch(search, {
     headers: { Accept: "application/json" },

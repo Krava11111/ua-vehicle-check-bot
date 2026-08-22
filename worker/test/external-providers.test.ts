@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { fetchAuctions, refreshExternalProviders } from "../src/external-providers.js";
+import { fetchAuctions, fetchAutoRia, refreshExternalProviders } from "../src/external-providers.js";
 import type { Env } from "../src/types.js";
 
 test("external providers remain honest when API keys are absent", async () => {
@@ -19,6 +19,54 @@ test("external providers reject malformed VIN before network access", async () =
     message = error instanceof Error ? error.message : String(error);
   }
   assert.match(message, /invalid_vin/);
+});
+
+test("AUTO.RIA lookup uses the documented VIN array and imports only an exact VIN", async () => {
+  const originalFetch = globalThis.fetch;
+  const requested: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+    requested.push(url.toString());
+    if (url.pathname.endsWith("/auto/search")) {
+      assert.equal(url.searchParams.get("VIN[0]"), "5UXTR9C55JLC73127");
+      assert.equal(url.searchParams.get("searchType"), "4");
+      assert.equal(url.searchParams.has("vin"), false);
+      return Response.json({ result: { search_result: { ids: ["123", "456"] } } });
+    }
+    const id = url.searchParams.get("auto_id");
+    if (id === "123") return Response.json({
+      autoId: 123,
+      VIN: "5UXTR9C55JLC73127",
+      USD: 19_500,
+      raceInt: 57,
+      locationCityName: "Київ",
+      linkToView: "https://auto.ria.com/uk/auto_123.html",
+      updateDate: "2026-08-21T10:00:00Z",
+      isSold: false,
+      autoData: { markName: "BMW", modelName: "X3", year: 2018 },
+    });
+    return Response.json({
+      autoId: 456,
+      VIN: "WVWZZZ3CZHE123456",
+      USD: 10_000,
+      updateDate: "2026-08-21T10:00:00Z",
+    });
+  }) as typeof fetch;
+  try {
+    const listings = await fetchAutoRia("5UXTR9C55JLC73127", {
+      AUTO_RIA_API_KEY: "test-key",
+    } as Env);
+    assert.equal(listings.length, 1);
+    assert.equal(listings[0]?.externalId, "123");
+    assert.equal(listings[0]?.brand, "BMW");
+    assert.equal(listings[0]?.model, "X3");
+    assert.equal(listings[0]?.price, 19_500);
+    assert.equal(listings[0]?.mileage, 57_000);
+    assert.equal(listings[0]?.isActive, true);
+    assert.equal(requested.length, 3);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("auction lookup uses exact VIN endpoints and inherits VIN for sale history", async () => {
