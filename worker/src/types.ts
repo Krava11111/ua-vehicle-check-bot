@@ -20,6 +20,7 @@ export interface Env {
   AUCTION_API_BASE_URL?: string;
   BIDFAX_BASE_URL?: string;
   WELCOME_IMAGE_URL?: string;
+  PARTNER_CHECK_SECRET?: string;
 }
 
 export interface D1ResultLike<T = Record<string, unknown>> {

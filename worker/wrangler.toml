@@ -37,3 +37,4 @@ migrations_dir = "migrations"
 #   npx wrangler secret put HISTORY_IMPORT_SECRET
 #   npx wrangler secret put AUTO_RIA_API_KEY
 #   npx wrangler secret put AUCTION_API_KEY
+#   npx wrangler secret put PARTNER_CHECK_SECRET

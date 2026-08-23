@@ -58,6 +58,7 @@ project.
    npx wrangler secret put HISTORY_IMPORT_SECRET
    npx wrangler secret put AUTO_RIA_API_KEY
    npx wrangler secret put AUCTION_API_KEY
+   npx wrangler secret put PARTNER_CHECK_SECRET
    ```
 
 7. Create D1 once and apply migrations. Keep the generated database ID in `wrangler.toml`:

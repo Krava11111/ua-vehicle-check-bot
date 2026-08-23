@@ -5,6 +5,7 @@ import { ExternalHistoryService, importHistory } from "./history.js";
 import { checkWanted, findPlateHistory, findVehicles, loadManifest } from "./index-client.js";
 import { detectQuery, languageFor, normalizePlate, normalizeVin } from "./normalization.js";
 import { renderPlateHistory } from "./plate-history.js";
+import { isPartnerActivated, recordPartnerActivation } from "./partner-activation.js";
 import {
   buildVehicleCandidates,
   candidateId,
@@ -530,6 +531,16 @@ async function handleMessage(message: TelegramMessage, env: Env): Promise<void> 
     return;
   }
   if (text.startsWith("/start")) {
+    if (message.from) {
+      try {
+        await recordPartnerActivation(env, message.from.id);
+      } catch (error) {
+        console.error(
+          "partner_activation_write_failed",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
     if (language) await sendWelcomePhoto(env, message.chat.id, language);
     else await promptLanguage(env, message.chat.id);
     return;
@@ -840,6 +851,29 @@ function adminAuthorized(request: Request, env: Env): boolean {
   return request.headers.get("Authorization") === `Bearer ${env.HISTORY_IMPORT_SECRET}`;
 }
 
+function partnerCheckAuthorized(request: Request, env: Env): boolean {
+  if (!env.PARTNER_CHECK_SECRET) return false;
+  return request.headers.get("Authorization") === `Bearer ${env.PARTNER_CHECK_SECRET}`;
+}
+
+async function partnerActivationRequest(request: Request, env: Env): Promise<Response> {
+  if (!partnerCheckAuthorized(request, env)) {
+    return new Response("Forbidden", { status: 403 });
+  }
+  if (!env.HISTORY_DB) {
+    return Response.json({ ok: false, error: "storage_unavailable" }, { status: 503 });
+  }
+  const telegramId = new URL(request.url).searchParams.get("telegram_id") ?? "";
+  if (!/^\d{1,20}$/.test(telegramId)) {
+    return Response.json({ ok: false, error: "invalid_telegram_id" }, { status: 400 });
+  }
+  const activated = await isPartnerActivated(env, telegramId);
+  return Response.json(
+    { ok: true, active: activated },
+    { headers: { "Cache-Control": "private, no-store" } },
+  );
+}
+
 async function registerTelegramWebhook(request: Request, env: Env): Promise<Response> {
   if (!adminAuthorized(request, env)) return new Response("Forbidden", { status: 403 });
   const origin = new URL(request.url).origin;
@@ -882,6 +916,9 @@ async function handleRequest(request: Request, env: Env, context: ExecutionConte
   }
   if (request.method === "POST" && url.pathname === "/admin/register-webhook") {
     return registerTelegramWebhook(request, env);
+  }
+  if (request.method === "GET" && url.pathname === "/partner/activation") {
+    return partnerActivationRequest(request, env);
   }
   if (request.method === "GET" && url.pathname === "/health") {
     try {
